@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>paping-go Viewer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; }
+  header { padding: 20px 30px; background: #16213e; border-bottom: 2px solid #0f3460; display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+  header h1 { font-size: 22px; color: #e94560; }
+  header span { color: #888; font-size: 14px; }
+  .controls { display: flex; gap: 12px; align-items: center; margin-left: auto; }
+  .controls label { font-size: 13px; color: #aaa; }
+  .controls input, .controls select { padding: 6px 10px; border-radius: 4px; border: 1px solid #333; background: #0f3460; color: #eee; font-size: 13px; }
+  .controls button { padding: 6px 16px; border-radius: 4px; border: none; background: #e94560; color: #fff; cursor: pointer; font-size: 13px; }
+  .controls button:hover { background: #c73650; }
+  #drop-zone { display: flex; align-items: center; justify-content: center; height: calc(100vh - 80px); }
+  #drop-zone.active { border: 3px dashed #e94560; }
+  .drop-message { text-align: center; color: #666; }
+  .drop-message p { font-size: 20px; margin-bottom: 10px; }
+  .drop-message small { font-size: 13px; }
+  #chart { width: 100%; height: calc(100vh - 160px); }
+  .summary { display: flex; gap: 30px; padding: 10px 30px; background: #16213e; flex-wrap: wrap; }
+  .summary .stat { font-size: 13px; }
+  .summary .stat .val { color: #e94560; font-weight: bold; font-size: 15px; }
+  .summary .stat .val.ok { color: #2ecc71; }
+  .summary .stat .val.fail { color: #e74c3c; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>paping-go Viewer</h1>
+  <span id="file-info"></span>
+  <div class="controls hidden" id="controls">
+    <label>Show:</label>
+    <select id="filter">
+      <option value="all">All</option>
+      <option value="ok">Success only</option>
+      <option value="fail">Failures only</option>
+    </select>
+    <button id="reset-zoom">Reset Zoom</button>
+    <button id="load-another">Load CSV</button>
+  </div>
+</header>
+
+<div id="drop-zone">
+  <div class="drop-message">
+    <p>Drop a paping-go CSV file here</p>
+    <small>or <label style="color:#e94560;cursor:pointer;text-decoration:underline;">click to browse<input type="file" id="file-input" accept=".csv" style="display:none"></label></small>
+    <br><br>
+    <small style="color:#555;">Generated with: paping-go -p 443 -o results.csv example.com</small>
+  </div>
+</div>
+
+<div id="content" class="hidden">
+  <div class="summary" id="summary"></div>
+  <div id="chart"></div>
+</div>
+
+<script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
+<script>
+let rawData = [];
+let currentFile = '';
+
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',');
+  return lines.slice(1).map(line => {
+    const cols = line.split(',');
+    const obj = {};
+    headers.forEach((h, i) => obj[h.trim()] = (cols[i] || '').trim());
+    return obj;
+  });
+}
+
+function loadData(text, filename) {
+  rawData = parseCSV(text);
+  currentFile = filename;
+  if (rawData.length === 0) { alert('No data found in CSV'); return; }
+
+  document.getElementById('drop-zone').classList.add('hidden');
+  document.getElementById('content').classList.remove('hidden');
+  document.getElementById('controls').classList.remove('hidden');
+  document.getElementById('file-info').textContent = `${filename} — ${rawData.length} data points`;
+
+  renderChart('all');
+}
+
+function appendStat(parent, label, value, className = '') {
+  const stat = document.createElement('div');
+  stat.className = 'stat';
+  stat.append(document.createTextNode(label + ': '));
+
+  const val = document.createElement('span');
+  val.className = className ? `val ${className}` : 'val';
+  val.textContent = value;
+  stat.appendChild(val);
+  parent.appendChild(stat);
+}
+
+function renderChart(filter) {
+  let data = rawData;
+  if (filter === 'ok') data = rawData.filter(d => d.status === 'ok');
+  if (filter === 'fail') data = rawData.filter(d => d.status !== 'ok');
+
+  const okData = data.filter(d => d.status === 'ok');
+  const failData = data.filter(d => d.status !== 'ok');
+
+  // Summary
+  const totalOk = rawData.filter(d => d.status === 'ok');
+  const totalFail = rawData.filter(d => d.status !== 'ok');
+  const latencies = totalOk.map(d => parseFloat(d.latency_ms)).filter(v => !isNaN(v));
+  const min = latencies.length ? Math.min(...latencies).toFixed(2) : '-';
+  const max = latencies.length ? Math.max(...latencies).toFixed(2) : '-';
+  const avg = latencies.length ? (latencies.reduce((a,b) => a+b, 0) / latencies.length).toFixed(2) : '-';
+  const host = rawData[0].host || '?';
+  const ip = rawData[0].ip || '?';
+  const port = rawData[0].port || '?';
+  const duration = rawData.length >= 2
+    ? formatDuration(new Date(rawData[rawData.length-1].timestamp) - new Date(rawData[0].timestamp))
+    : '-';
+
+  const summary = document.getElementById('summary');
+  summary.replaceChildren();
+  appendStat(summary, 'Target', `${host} [${ip}]:${port}`);
+  appendStat(summary, 'Duration', duration);
+  appendStat(summary, 'Total', rawData.length.toString());
+  appendStat(summary, 'Success', totalOk.length.toString(), 'ok');
+  appendStat(summary, 'Failed', totalFail.length.toString(), 'fail');
+  appendStat(summary, 'Min', `${min} ms`);
+  appendStat(summary, 'Max', `${max} ms`);
+  appendStat(summary, 'Avg', `${avg} ms`);
+
+  const traces = [];
+
+  if (okData.length > 0) {
+    traces.push({
+      x: okData.map(d => d.timestamp),
+      y: okData.map(d => parseFloat(d.latency_ms)),
+      mode: 'lines+markers',
+      type: 'scatter',
+      name: 'Latency (ms)',
+      marker: { color: '#2ecc71', size: 4 },
+      line: { color: '#2ecc71', width: 1.5 },
+      hovertemplate: '<b>%{x|%H:%M:%S}</b><br>Latency: %{y:.2f} ms<extra></extra>'
+    });
+  }
+
+  if (failData.length > 0) {
+    // Plot failures at y=0 with red markers
+    const maxY = latencies.length ? Math.max(...latencies) : 100;
+    traces.push({
+      x: failData.map(d => d.timestamp),
+      y: failData.map(() => 0),
+      mode: 'markers',
+      type: 'scatter',
+      name: 'Failed',
+      marker: { color: '#e74c3c', size: 8, symbol: 'x' },
+      hovertemplate: '<b>%{x|%H:%M:%S}</b><br>%{text}<extra></extra>',
+      text: failData.map(d => d.status)
+    });
+  }
+
+  const layout = {
+    paper_bgcolor: '#1a1a2e',
+    plot_bgcolor: '#16213e',
+    font: { color: '#ccc', size: 12 },
+    margin: { l: 60, r: 30, t: 30, b: 60 },
+    xaxis: {
+      title: 'Time',
+      gridcolor: '#2a2a4a',
+      tickformat: '%H:%M:%S',
+      rangeslider: { visible: true, bgcolor: '#0f3460', thickness: 0.08 }
+    },
+    yaxis: {
+      title: 'Latency (ms)',
+      gridcolor: '#2a2a4a',
+      rangemode: 'tozero'
+    },
+    legend: { x: 0, y: 1.1, orientation: 'h' },
+    dragmode: 'zoom',
+    hovermode: 'x unified'
+  };
+
+  const config = {
+    responsive: true,
+    displayModeBar: true,
+    modeBarButtonsToAdd: ['select2d', 'lasso2d'],
+    displaylogo: false,
+    scrollZoom: true
+  };
+
+  Plotly.newPlot('chart', traces, layout, config);
+}
+
+function formatDuration(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s/60) + 'm ' + (s%60) + 's';
+  const h = Math.floor(s/3600);
+  const m = Math.floor((s%3600)/60);
+  return h + 'h ' + m + 'm';
+}
+
+// File input
+document.getElementById('file-input').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  file.text().then(text => loadData(text, file.name));
+});
+
+// Drag & drop
+const dropZone = document.getElementById('drop-zone');
+document.body.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('active'); });
+document.body.addEventListener('dragleave', () => dropZone.classList.remove('active'));
+document.body.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('active');
+  const file = e.dataTransfer.files[0];
+  if (file) file.text().then(text => loadData(text, file.name));
+});
+
+// Controls
+document.getElementById('filter').addEventListener('change', e => renderChart(e.target.value));
+document.getElementById('reset-zoom').addEventListener('click', () => {
+  Plotly.relayout('chart', { 'xaxis.autorange': true, 'yaxis.autorange': true });
+});
+document.getElementById('load-another').addEventListener('click', () => {
+  document.getElementById('file-input').click();
+});
+</script>
+</body>
+</html>

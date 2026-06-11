@@ -1,0 +1,28 @@
+# Built binaries
+paping-go
+paping-go.exe
+portpulse
+portpulse.exe
+*-linux-amd64
+*-linux-arm64
+*-windows-amd64.exe
+*-darwin-amd64
+*-darwin-arm64
+
+# Generated output
+results.csv
+*.csv
+
+# Logs / temp
+*.log
+tmp/
+temp/
+dist/
+build/
+coverage.out
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
