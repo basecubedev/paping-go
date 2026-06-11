@@ -12,6 +12,7 @@ portpulse.exe
 # Generated output
 results.csv
 *.csv
+!examples/localhost-demo.csv
 
 # Logs / temp
 *.log
