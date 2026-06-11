@@ -1,0 +1,79 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ "v*" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            name: paping-go-linux-amd64
+          - goos: linux
+            goarch: arm64
+            name: paping-go-linux-arm64
+          - goos: windows
+            goarch: amd64
+            name: paping-go-windows-amd64.exe
+          - goos: darwin
+            goarch: amd64
+            name: paping-go-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            name: paping-go-darwin-arm64
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('dev-{0}', github.sha) }}
+        run: go build -ldflags "-X main.version=${VERSION}" -o "${{ matrix.name }}" .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum paping-go-* > SHA256SUMS
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
