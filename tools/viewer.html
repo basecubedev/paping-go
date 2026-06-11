@@ -2,13 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>paping-go Viewer</title>
+<title>paping-go standalone CSV viewer</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; }
   header { padding: 20px 30px; background: #16213e; border-bottom: 2px solid #0f3460; display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
   header h1 { font-size: 22px; color: #e94560; }
   header span { color: #888; font-size: 14px; }
+  .viewer-intro { flex-basis: 100%; max-width: 920px; color: #cbd5e1; font-size: 14px; line-height: 1.45; }
+  .viewer-intro code { color: #fff; background: #0f3460; border-radius: 4px; padding: 2px 5px; }
   .controls { display: flex; gap: 12px; align-items: center; margin-left: auto; }
   .controls label { font-size: 13px; color: #aaa; }
   .controls input, .controls select { padding: 6px 10px; border-radius: 4px; border: 1px solid #333; background: #0f3460; color: #eee; font-size: 13px; }
@@ -19,6 +21,7 @@
   .drop-message { text-align: center; color: #666; }
   .drop-message p { font-size: 20px; margin-bottom: 10px; }
   .drop-message small { font-size: 13px; }
+  .privacy-note { margin-top: 18px; color: #9ca3af; font-size: 13px; }
   #chart { width: 100%; height: calc(100vh - 160px); }
   .summary { display: flex; gap: 30px; padding: 10px 30px; background: #16213e; flex-wrap: wrap; }
   .summary .stat { font-size: 13px; }
@@ -31,7 +34,11 @@
 <body>
 
 <header>
-  <h1>paping-go Viewer</h1>
+  <h1>paping-go standalone CSV viewer</h1>
+  <p class="viewer-intro">
+    Load a paping-go CSV file locally in your browser. No data is uploaded.
+    For shareable reports, use <code>paping-go report results.csv -o report.html</code>.
+  </p>
   <span id="file-info"></span>
   <div class="controls hidden" id="controls">
     <label>Show:</label>
@@ -50,7 +57,8 @@
     <p>Drop a paping-go CSV file here</p>
     <small>or <label style="color:#e94560;cursor:pointer;text-decoration:underline;">click to browse<input type="file" id="file-input" accept=".csv" style="display:none"></label></small>
     <br><br>
-    <small style="color:#555;">Generated with: paping-go -p 8080 -o results.csv 127.0.0.1</small>
+    <small style="color:#555;">See the README and examples directory for CSV generation examples.</small>
+    <p class="privacy-note">Privacy: CSV files are processed locally in your browser. They are not uploaded.</p>
   </div>
 </div>
 
