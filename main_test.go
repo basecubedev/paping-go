@@ -212,7 +212,10 @@ func TestCLIHelpSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("paping-go --help failed: %v\n%s", err, output)
 	}
-	if !strings.Contains(output, "Usage: paping-go") {
+	if !strings.Contains(output, "paping-go [options] <host>") ||
+		!strings.Contains(output, "paping-go report <csv-file> -o <report.html>") ||
+		!strings.Contains(output, "-c N        number of checks (-1 = infinite, default: -1)") ||
+		!strings.Contains(output, "-d DURATION run for duration; cannot be combined with -c") {
 		t.Fatalf("help output missing usage:\n%s", output)
 	}
 }

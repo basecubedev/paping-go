@@ -170,9 +170,9 @@ func dialTarget(network, address string, timeout time.Duration) (float64, error)
 	return ms, conn.Close()
 }
 
-func flagWasSet(name string) bool {
+func flagWasSet(fs *flag.FlagSet, name string) bool {
 	found := false
-	flag.Visit(func(f *flag.Flag) {
+	fs.Visit(func(f *flag.Flag) {
 		if f.Name == name {
 			found = true
 		}
@@ -181,23 +181,45 @@ func flagWasSet(name string) bool {
 }
 
 func main() {
-	port := flag.Int("p", 0, "TCP port (required)")
-	count := flag.Int("c", -1, "number of checks (default: infinite)")
-	timeout := flag.Int("t", 1000, "timeout in milliseconds")
-	nocolor := flag.Bool("nocolor", false, "disable color output")
-	forceV4 := flag.Bool("4", false, "force IPv4")
-	forceV6 := flag.Bool("6", false, "force IPv6")
-	outFile := flag.String("o", "", "write results to CSV file")
-	runDuration := flag.String("d", "", "run for duration (e.g. 30s, 5m, 1h)")
-	rateStr := flag.String("r", "1", "requests per second (e.g. 0.5, 1, 5)")
-	showVersion := flag.Bool("version", false, "print version and exit")
+	os.Exit(run(os.Args[1:]))
+}
 
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: paping-go [options] destination\n\n")
+func run(args []string) int {
+	if len(args) > 0 && args[0] == "report" {
+		return runReport(args[1:])
+	}
+	return runCheck(args)
+}
+
+func runCheck(args []string) int {
+	useColor = true
+
+	fs := flag.NewFlagSet("paping-go", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+
+	port := fs.Int("p", 0, "TCP port (required)")
+	count := fs.Int("c", -1, "number of checks (default: infinite)")
+	timeout := fs.Int("t", 1000, "timeout in milliseconds")
+	nocolor := fs.Bool("nocolor", false, "disable color output")
+	forceV4 := fs.Bool("4", false, "force IPv4")
+	forceV6 := fs.Bool("6", false, "force IPv6")
+	outFile := fs.String("o", "", "write results to CSV file")
+	runDuration := fs.String("d", "", "run for duration (e.g. 30s, 5m, 1h)")
+	rateStr := fs.String("r", "1", "requests per second (e.g. 0.5, 1, 5)")
+	showVersion := fs.Bool("version", false, "print version and exit")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage:\n")
+		fmt.Fprintf(os.Stderr, "  paping-go [options] <host>\n")
+		fmt.Fprintf(os.Stderr, "  paping-go report <csv-file> -o <report.html>\n\n")
+		fmt.Fprintf(os.Stderr, "Examples:\n")
+		fmt.Fprintf(os.Stderr, "  paping-go -p 443 -c 5 example.com\n")
+		fmt.Fprintf(os.Stderr, "  paping-go -p 443 -c 100 -o results.csv example.com\n")
+		fmt.Fprintf(os.Stderr, "  paping-go report results.csv -o report.html\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		fmt.Fprintf(os.Stderr, "  -p N        TCP port (required)\n")
-		fmt.Fprintf(os.Stderr, "  -c N        number of checks (default: infinite)\n")
-		fmt.Fprintf(os.Stderr, "  -d DURATION run for duration (e.g. 30s, 5m, 1h)\n")
+		fmt.Fprintf(os.Stderr, "  -c N        number of checks (-1 = infinite, default: -1)\n")
+		fmt.Fprintf(os.Stderr, "  -d DURATION run for duration; cannot be combined with -c\n")
 		fmt.Fprintf(os.Stderr, "  -r N        requests per second (default: 1, e.g. 0.5, 2, 10)\n")
 		fmt.Fprintf(os.Stderr, "  -t N        timeout in milliseconds (default: 1000)\n")
 		fmt.Fprintf(os.Stderr, "  -4          force IPv4\n")
@@ -206,7 +228,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  -nocolor    disable color output\n")
 		fmt.Fprintf(os.Stderr, "  -version    print version and exit\n")
 	}
-	flag.Parse()
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
 
 	if *nocolor {
 		useColor = false
@@ -215,41 +242,41 @@ func main() {
 
 	fmt.Printf("paping-go %s\n\n", version)
 	if *showVersion {
-		return
+		return 0
 	}
 
 	if err := validatePort(*port); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		flag.Usage()
-		os.Exit(2)
+		fs.Usage()
+		return 2
 	}
 	if err := validateTimeout(*timeout); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(2)
+		return 2
 	}
 	if err := validateIPMode(*forceV4, *forceV6); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v.\n", err)
-		flag.Usage()
-		os.Exit(2)
+		fs.Usage()
+		return 2
 	}
-	dest, err := validateDestination(flag.Args())
+	dest, err := validateDestination(fs.Args())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		flag.Usage()
-		os.Exit(2)
+		fs.Usage()
+		return 2
 	}
 
 	rate, rerr := parseRate(*rateStr)
 	if rerr != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", rerr)
-		os.Exit(2)
+		return 2
 	}
 	interval := time.Duration(float64(time.Second) / rate)
 	dur := time.Duration(*timeout) * time.Millisecond
-	runLimit, runLimitErr := validateRunLimits(*count, *runDuration, flagWasSet("c"))
+	runLimit, runLimitErr := validateRunLimits(*count, *runDuration, flagWasSet(fs, "c"))
 	if runLimitErr != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", runLimitErr)
-		os.Exit(2)
+		return 2
 	}
 
 	// Resolve hostname
@@ -265,7 +292,7 @@ func main() {
 	cancel()
 	if err != nil || len(addrs) == 0 {
 		fmt.Fprintln(os.Stderr, col(colorRed, "Host lookup failed"))
-		os.Exit(1)
+		return 1
 	}
 
 	var ip net.IP
@@ -289,7 +316,7 @@ func main() {
 	}
 	if ip == nil {
 		fmt.Println(col(colorRed, "No matching address found for requested protocol"))
-		os.Exit(1)
+		return 1
 	}
 
 	ipStr := ip.String()
@@ -329,14 +356,14 @@ func main() {
 		f, ferr := os.Create(*outFile)
 		if ferr != nil {
 			fmt.Fprintf(os.Stderr, "Error: cannot create file %s: %v\n", *outFile, ferr)
-			os.Exit(2)
+			return 2
 		}
 		csvFile = f
 		csvWriter = csv.NewWriter(f)
 		if err := writeCSVRow(csvWriter, []string{"timestamp", "host", "ip", "port", "status", "latency_ms"}); err != nil {
 			fmt.Fprintf(os.Stderr, "CSV write error: %v\n", err)
 			csvFile.Close()
-			os.Exit(2)
+			return 2
 		}
 	}
 
@@ -422,5 +449,5 @@ done:
 		}
 	}
 	st.print()
-	os.Exit(exitCode)
+	return exitCode
 }
