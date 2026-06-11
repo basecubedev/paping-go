@@ -102,6 +102,60 @@
     display: block;
     width: 100%;
     height: auto;
+    min-height: 320px;
+    touch-action: none;
+    user-select: none;
+  }
+  .chart-shell {
+    background: #f8fafc;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .chart-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .chart-controls button {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--ink);
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    padding: 6px 10px;
+  }
+  .chart-controls button:hover {
+    border-color: var(--blue);
+    color: var(--blue);
+  }
+  .chart-display-options {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    margin-bottom: 12px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .chart-display-options label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--ink);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .chart-display-options input {
+    accent-color: var(--blue);
+  }
+  .chart-range {
+    color: var(--muted);
+    font-size: 13px;
+    margin-left: auto;
   }
   table {
     width: 100%;

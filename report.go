@@ -4,6 +4,7 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
@@ -59,7 +60,7 @@ type ReportStats struct {
 type reportViewData struct {
 	GeneratedAt    string
 	Stats          ReportStats
-	Chart          template.HTML
+	ChartJSON      template.JS
 	ChartInfo      ChartInfo
 	Failures       []ReportRow
 	RecentRows     []ReportRow
@@ -70,6 +71,15 @@ type reportViewData struct {
 type ChartInfo struct {
 	OriginalRows int
 	Note         string
+}
+
+type ChartPoint struct {
+	Index     int     `json:"index"`
+	Label     string  `json:"label"`
+	Timestamp string  `json:"timestamp,omitempty"`
+	LatencyMS float64 `json:"latencyMs,omitempty"`
+	Success   bool    `json:"success"`
+	Error     string  `json:"error,omitempty"`
 }
 
 func runReport(args []string) int {
@@ -400,7 +410,7 @@ func renderReportHTML(rows []ReportRow, generatedAt time.Time) (string, error) {
 	data := reportViewData{
 		GeneratedAt: generatedAt.Format(time.RFC3339),
 		Stats:       stats,
-		Chart:       template.HTML(renderLatencySVG(chartRows, stats)),
+		ChartJSON:   chartJSON,
 		ChartInfo: ChartInfo{
 			OriginalRows: len(rows),
 			Note:         chartFullDataNote(len(rows)),
@@ -416,6 +426,14 @@ func renderReportHTML(rows []ReportRow, generatedAt time.Time) (string, error) {
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+func marshalChartJSON(points []ChartPoint) (template.JS, error) {
+	data, err := json.Marshal(points)
+	if err != nil {
+		return "", err
+	}
+	return template.JS(data), nil
 }
 
 func reportTemplateFuncs() template.FuncMap {
