@@ -141,6 +141,55 @@ func TestRenderReportHTMLEscapesCSVValues(t *testing.T) {
 	if !strings.Contains(html, "&lt;script&gt;") || !strings.Contains(html, "&lt;b&gt;boom&lt;/b&gt;") {
 		t.Fatalf("report missing escaped CSV values:\n%s", html)
 	}
+	if !strings.Contains(html, `\u003cb\u003eboom\u003c/b\u003e`) {
+		t.Fatalf("report missing safely escaped JSON chart values:\n%s", html)
+	}
+}
+
+func TestRenderReportHTMLIncludesInteractiveChartAssets(t *testing.T) {
+	html, err := renderReportHTML(makeReportRows(12, 5), time.Date(2026, 6, 11, 11, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("renderReportHTML failed: %v", err)
+	}
+	for _, want := range []string{
+		"const chartData = [",
+		`id="chart-reset"`,
+		`id="chart-zoom-in"`,
+		`id="chart-zoom-out"`,
+		`id="toggle-latency-line"`,
+		`id="toggle-data-points"`,
+		`id="toggle-failed-checks"`,
+		"Latency line",
+		"Data points",
+		"Failed checks",
+		`title=`,
+		"line breaks at failed checks",
+		"individual successful checks",
+		"failed TCP checks",
+		"chartData.length <= 300",
+		"currentSegment",
+		"No chart layers selected.",
+		"Wheel to zoom",
+		"Chart contains all 12 CSV rows.",
+		"Interactive chart zoom and display toggles require JavaScript.",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("interactive report missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{
+		"Blue line and points show successful checks.",
+		"Use the display options to show or hide",
+		"downsampled",
+		"sampled points",
+	} {
+		if strings.Contains(html, unwanted) {
+			t.Fatalf("interactive report should not contain noisy/incorrect text %q", unwanted)
+		}
+	}
+	if strings.Contains(html, "Failure markers") {
+		t.Fatal("interactive report should use user-friendly Failed checks wording")
+	}
 }
 
 func TestRecentReportRowsReturnsMostRecentRows(t *testing.T) {
@@ -175,51 +224,84 @@ func TestRecentFailureRowsReturnsMostRecentFailures(t *testing.T) {
 	}
 }
 
-func TestDownsampleChartRows(t *testing.T) {
-	rows := makeReportRows(maxChartPoints, 0)
-	got := downsampleChartRows(rows, maxChartPoints)
-	if len(got) != len(rows) {
-		t.Fatalf("rows at limit = %d, want %d", len(got), len(rows))
+func TestBuildChartPoints(t *testing.T) {
+	rows := []ReportRow{
+		{
+			Timestamp: time.Date(2026, 6, 11, 10, 0, 0, 0, time.UTC),
+			Target:    "127.0.0.1",
+			Port:      8080,
+			Success:   true,
+			LatencyMS: 12.345,
+		},
+		{
+			Timestamp: time.Date(2026, 6, 11, 10, 0, 1, 0, time.UTC),
+			Target:    "127.0.0.1",
+			Port:      8080,
+			Success:   false,
+			Error:     `timeout "quoted"`,
+		},
 	}
+	points := buildChartPoints(rows)
+	if len(points) != 2 {
+		t.Fatalf("chart points = %d, want 2", len(points))
+	}
+	if points[0].Index != 1 || points[0].Label != "Attempt 1" || !points[0].Success || points[0].LatencyMS != 12.345 {
+		t.Fatalf("success chart point = %#v", points[0])
+	}
+	if points[1].Index != 2 || points[1].Success || points[1].Error != `timeout "quoted"` {
+		t.Fatalf("failure chart point = %#v", points[1])
+	}
+	if _, err := json.Marshal(points); err != nil {
+		t.Fatalf("chart points must marshal to JSON: %v", err)
+	}
+}
 
-	rows = makeReportRows(maxChartPoints+1000, 333)
-	got = downsampleChartRows(rows, maxChartPoints)
-	again := downsampleChartRows(rows, maxChartPoints)
-	if len(got) > maxChartPoints {
-		t.Fatalf("downsampled rows = %d, want at most %d", len(got), maxChartPoints)
+func TestBuildChartPointsIncludesAllRows(t *testing.T) {
+	rows := makeReportRows(10000, 100)
+	points := buildChartPoints(rows)
+	if len(points) != len(rows) {
+		t.Fatalf("chart points = %d, want %d", len(points), len(rows))
 	}
-	if !got[0].Timestamp.Equal(rows[0].Timestamp) || !got[len(got)-1].Timestamp.Equal(rows[len(rows)-1].Timestamp) {
-		t.Fatalf("downsample did not preserve first/last rows")
-	}
-	if len(got) != len(again) {
-		t.Fatalf("deterministic length mismatch = %d/%d", len(got), len(again))
-	}
-	for i := range got {
-		if !got[i].Timestamp.Equal(again[i].Timestamp) {
-			t.Fatalf("downsample not deterministic at %d: %s != %s", i, got[i].Timestamp, again[i].Timestamp)
-		}
+	if points[0].Index != 1 || points[len(points)-1].Index != len(rows) {
+		t.Fatalf("chart points did not preserve first/last index: %d/%d", points[0].Index, points[len(points)-1].Index)
 	}
 }
 
 func TestRenderReportHTMLLargeDatasetStaysCompact(t *testing.T) {
-	rows := makeReportRows(10000, 10)
+	rows := makeReportRows(10001, 10)
 	html, err := renderReportHTML(rows, time.Date(2026, 6, 11, 11, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("renderReportHTML failed: %v", err)
 	}
 	for _, want := range []string{
-		"Chart downsampled from 10000 rows to 2000 points for readability.",
-		"Showing the most recent 200 of 10000 raw rows.",
-		"1000 failures recorded. Showing the most recent 100.",
+		"Chart contains all 10001 CSV rows. Large reports may take longer to open or interact with.",
+		"Showing the most recent 200 of 10001 raw rows.",
+		"1001 failures recorded. Showing the most recent 100.",
 		"<details",
 		"Full data remains in the CSV file.",
+		"const chartData = [",
+		`id="chart-reset"`,
+		`id="toggle-data-points"`,
+		"Wheel to zoom",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("large report missing %q", want)
 		}
 	}
+	for _, unwanted := range []string{"downsampled", "sampled points"} {
+		if strings.Contains(html, unwanted) {
+			t.Fatalf("large report should not contain %q", unwanted)
+		}
+	}
 	if strings.Count(html, "<tr>") > maxRecentRows+maxReportFailures+4 {
 		t.Fatalf("large report rendered too many table rows: %d", strings.Count(html, "<tr>"))
+	}
+}
+
+func TestChartFullDataNoteWarnsForVeryLargeReports(t *testing.T) {
+	note := chartFullDataNote(100001)
+	if !strings.Contains(note, "Chart contains all 100001 CSV rows.") || !strings.Contains(note, "Very large reports can be slow in the browser") {
+		t.Fatalf("very large report note = %q", note)
 	}
 }
 

@@ -21,7 +21,8 @@ var reportTemplateHTML string
 const (
 	maxRecentRows     = 200
 	maxReportFailures = 100
-	maxChartPoints    = 2000
+	largeReportRows   = 10000
+	veryLargeRows     = 100000
 )
 
 type ReportRow struct {
@@ -68,8 +69,7 @@ type reportViewData struct {
 
 type ChartInfo struct {
 	OriginalRows int
-	ShownRows    int
-	Downsampled  bool
+	Note         string
 }
 
 func runReport(args []string) int {
@@ -387,7 +387,11 @@ func percentileNearestRank(sortedValues []float64, percentile float64) float64 {
 
 func renderReportHTML(rows []ReportRow, generatedAt time.Time) (string, error) {
 	stats := computeReportStats(rows)
-	chartRows := downsampleChartRows(rows, maxChartPoints)
+	chartPoints := buildChartPoints(rows)
+	chartJSON, err := marshalChartJSON(chartPoints)
+	if err != nil {
+		return "", err
+	}
 	tmpl, err := template.New("report").Funcs(reportTemplateFuncs()).Parse(reportTemplateHTML)
 	if err != nil {
 		return "", err
@@ -399,8 +403,7 @@ func renderReportHTML(rows []ReportRow, generatedAt time.Time) (string, error) {
 		Chart:       template.HTML(renderLatencySVG(chartRows, stats)),
 		ChartInfo: ChartInfo{
 			OriginalRows: len(rows),
-			ShownRows:    len(chartRows),
-			Downsampled:  len(chartRows) < len(rows),
+			Note:         chartFullDataNote(len(rows)),
 		},
 		Failures:       recentFailureRows(rows, maxReportFailures),
 		RecentRows:     recentReportRows(rows, maxRecentRows),
@@ -460,6 +463,17 @@ func reportTemplateFuncs() template.FuncMap {
 	}
 }
 
+func chartFullDataNote(rows int) string {
+	switch {
+	case rows > veryLargeRows:
+		return fmt.Sprintf("Chart contains all %d CSV rows. Very large reports can be slow in the browser; the CSV remains the canonical raw data source.", rows)
+	case rows > largeReportRows:
+		return fmt.Sprintf("Chart contains all %d CSV rows. Large reports may take longer to open or interact with.", rows)
+	default:
+		return fmt.Sprintf("Chart contains all %d CSV rows.", rows)
+	}
+}
+
 func recentFailureRows(rows []ReportRow, limit int) []ReportRow {
 	failures := make([]ReportRow, 0)
 	for _, row := range rows {
@@ -480,110 +494,21 @@ func recentReportRows(rows []ReportRow, limit int) []ReportRow {
 	return rows[len(rows)-limit:]
 }
 
-func downsampleChartRows(rows []ReportRow, limit int) []ReportRow {
-	if limit <= 0 || len(rows) <= limit {
-		return rows
-	}
-	if limit == 1 {
-		return rows[:1]
-	}
-
-	sampled := make([]ReportRow, 0, limit)
-	lastIndex := len(rows) - 1
-	for i := 0; i < limit; i++ {
-		idx := int(math.Round(float64(i) * float64(lastIndex) / float64(limit-1)))
-		if i > 0 && i < limit-1 {
-			start := int(math.Floor(float64(i) * float64(len(rows)) / float64(limit)))
-			end := int(math.Floor(float64(i+1) * float64(len(rows)) / float64(limit)))
-			if end <= start {
-				end = start + 1
-			}
-			if end > len(rows) {
-				end = len(rows)
-			}
-			for j := start; j < end; j++ {
-				if !rows[j].Success {
-					idx = j
-					break
-				}
-			}
+func buildChartPoints(rows []ReportRow) []ChartPoint {
+	points := make([]ChartPoint, 0, len(rows))
+	for idx, row := range rows {
+		point := ChartPoint{
+			Index:     idx + 1,
+			Label:     fmt.Sprintf("Attempt %d", idx+1),
+			Timestamp: row.Timestamp.Format(time.RFC3339),
+			Success:   row.Success,
 		}
-		sampled = append(sampled, rows[idx])
-	}
-	return sampled
-}
-
-func renderLatencySVG(rows []ReportRow, stats ReportStats) string {
-	const (
-		width   = 960.0
-		height  = 320.0
-		left    = 58.0
-		right   = 24.0
-		top     = 24.0
-		bottom  = 48.0
-		pointR  = 3.0
-		failTop = top + 10
-	)
-
-	plotWidth := width - left - right
-	plotHeight := height - top - bottom
-	maxLatency := stats.MaxLatencyMS
-	if maxLatency <= 0 {
-		maxLatency = 1
-	}
-
-	xFor := func(index int) float64 {
-		if len(rows) <= 1 {
-			return left + plotWidth/2
-		}
-		return left + (float64(index) / float64(len(rows)-1) * plotWidth)
-	}
-	yFor := func(latency float64) float64 {
-		return top + plotHeight - (latency / maxLatency * plotHeight)
-	}
-
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf(`<svg class="chart" viewBox="0 0 %.0f %.0f" role="img" aria-label="Latency over attempts">`, width, height))
-	b.WriteString(fmt.Sprintf(`<rect x="0" y="0" width="%.0f" height="%.0f" rx="8" fill="#f8fafc"/>`, width, height))
-	b.WriteString(fmt.Sprintf(`<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#94a3b8"/>`, left, top+plotHeight, left+plotWidth, top+plotHeight))
-	b.WriteString(fmt.Sprintf(`<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#94a3b8"/>`, left, top, left, top+plotHeight))
-	for i := 0; i <= 4; i++ {
-		y := top + plotHeight - float64(i)/4*plotHeight
-		value := maxLatency * float64(i) / 4
-		b.WriteString(fmt.Sprintf(`<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#e2e8f0"/>`, left, y, left+plotWidth, y))
-		b.WriteString(fmt.Sprintf(`<text x="%.1f" y="%.1f" text-anchor="end" font-size="11" fill="#475569">%.1f</text>`, left-8, y+4, value))
-	}
-
-	var path strings.Builder
-	started := false
-	for i, row := range rows {
-		x := xFor(i)
-		if !row.Success {
-			b.WriteString(fmt.Sprintf(`<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#dc2626" stroke-width="2"/>`, x, failTop, x, top+plotHeight))
-			b.WriteString(fmt.Sprintf(`<circle cx="%.1f" cy="%.1f" r="%.1f" fill="#dc2626"/>`, x, failTop, pointR))
-			continue
-		}
-		y := yFor(row.LatencyMS)
-		if !started {
-			path.WriteString(fmt.Sprintf("M %.1f %.1f", x, y))
-			started = true
+		if row.Success {
+			point.LatencyMS = row.LatencyMS
 		} else {
-			path.WriteString(fmt.Sprintf(" L %.1f %.1f", x, y))
+			point.Error = row.Error
 		}
+		points = append(points, point)
 	}
-	if started {
-		b.WriteString(fmt.Sprintf(`<path d="%s" fill="none" stroke="#2563eb" stroke-width="2.5"/>`, path.String()))
-	}
-	for i, row := range rows {
-		if !row.Success {
-			continue
-		}
-		x := xFor(i)
-		y := yFor(row.LatencyMS)
-		b.WriteString(fmt.Sprintf(`<circle cx="%.1f" cy="%.1f" r="%.1f" fill="#2563eb"><title>Attempt %d: %.3f ms</title></circle>`, x, y, pointR, i+1, row.LatencyMS))
-	}
-	b.WriteString(fmt.Sprintf(`<text x="%.1f" y="%.1f" font-size="12" fill="#475569">attempt</text>`, left+plotWidth-45, height-14))
-	b.WriteString(fmt.Sprintf(`<text x="%.1f" y="%.1f" font-size="12" fill="#475569">latency ms</text>`, 8.0, top-8))
-	b.WriteString(`</svg>`)
-	return b.String()
+	return points
 }

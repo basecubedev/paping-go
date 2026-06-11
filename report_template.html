@@ -211,13 +211,28 @@
 
   <section class="panel">
     <h2>Latency Over Attempts</h2>
-    {{.Chart}}
-    <p class="note">Blue points are successful checks. Red markers indicate failed checks.</p>
-    {{if .ChartInfo.Downsampled}}
-    <p class="note">Chart downsampled from {{.ChartInfo.OriginalRows}} rows to {{.ChartInfo.ShownRows}} points for readability. Full data remains available in the CSV file.</p>
-    {{else}}
-    <p class="note">Chart shows all {{.ChartInfo.OriginalRows}} rows. Full data remains available in the CSV file.</p>
-    {{end}}
+    <div class="chart-controls" aria-label="Chart controls">
+      <button type="button" id="chart-reset" title="Return to the full chart range.">Reset zoom</button>
+      <button type="button" id="chart-zoom-in" title="Zoom into the current chart range.">Zoom in</button>
+      <button type="button" id="chart-zoom-out" title="Zoom out from the current chart range.">Zoom out</button>
+      <button type="button" id="chart-pan-left" title="Pan the visible chart range left.">Pan left</button>
+      <button type="button" id="chart-pan-right" title="Pan the visible chart range right.">Pan right</button>
+      <span class="chart-range" id="chart-range">Current range: loading</span>
+    </div>
+    <div class="chart-display-options" aria-label="Chart display options">
+      <span>Display:</span>
+      <label title="Connects successful checks to show latency trends. The line breaks at failed checks."><input type="checkbox" id="toggle-latency-line"> Latency line</label>
+      <label title="Shows individual successful checks. Disabled by default for large reports to reduce visual clutter."><input type="checkbox" id="toggle-data-points"> Data points</label>
+      <label title="Shows failed TCP checks as separate markers because failures do not have a latency value."><input type="checkbox" id="toggle-failed-checks"> Failed checks</label>
+    </div>
+    <div class="chart-shell">
+      <svg class="chart" id="latency-chart" viewBox="0 0 960 320" role="img" aria-label="Latency over attempts"></svg>
+    </div>
+    <noscript>
+      <p class="note">Interactive chart zoom and display toggles require JavaScript. Summary and tables remain available.</p>
+    </noscript>
+    <p class="note">Wheel to zoom | Drag to pan | Double-click to reset.</p>
+    <p class="note">{{.ChartInfo.Note}}</p>
   </section>
 
   <details class="details-panel">
@@ -264,5 +279,271 @@
     </table>
   </details>
 </main>
+<script>
+(() => {
+  const chartData = {{.ChartJSON}};
+  const originalRows = {{.ChartInfo.OriginalRows}};
+  const svg = document.getElementById('latency-chart');
+  const rangeLabel = document.getElementById('chart-range');
+  const resetButton = document.getElementById('chart-reset');
+  const zoomInButton = document.getElementById('chart-zoom-in');
+  const zoomOutButton = document.getElementById('chart-zoom-out');
+  const panLeftButton = document.getElementById('chart-pan-left');
+  const panRightButton = document.getElementById('chart-pan-right');
+  const latencyLineToggle = document.getElementById('toggle-latency-line');
+  const dataPointsToggle = document.getElementById('toggle-data-points');
+  const failedChecksToggle = document.getElementById('toggle-failed-checks');
+  const ns = 'http://www.w3.org/2000/svg';
+  const dims = { width: 960, height: 320, left: 58, right: 24, top: 24, bottom: 48 };
+  const plotWidth = dims.width - dims.left - dims.right;
+  const plotHeight = dims.height - dims.top - dims.bottom;
+  const minWindow = Math.min(8, Math.max(1, chartData.length));
+  let viewStart = 0;
+  let viewEnd = Math.max(0, chartData.length - 1);
+  let dragging = false;
+  let dragStartX = 0;
+  let dragStartViewStart = 0;
+  let dragStartViewEnd = 0;
+
+  latencyLineToggle.checked = true;
+  dataPointsToggle.checked = chartData.length <= 300;
+  failedChecksToggle.checked = true;
+
+  function el(name, attrs = {}, text = '') {
+    const node = document.createElementNS(ns, name);
+    for (const [key, value] of Object.entries(attrs)) {
+      node.setAttribute(key, String(value));
+    }
+    if (text) {
+      node.textContent = text;
+    }
+    return node;
+  }
+
+  function clearSVG() {
+    while (svg.firstChild) {
+      svg.removeChild(svg.firstChild);
+    }
+  }
+
+  function visibleData() {
+    return chartData.slice(viewStart, viewEnd + 1);
+  }
+
+  function visibleLatencyMax(points) {
+    const latencies = points.filter(point => point.success).map(point => point.latencyMs);
+    if (!latencies.length) {
+      return 1;
+    }
+    return Math.max(1, Math.max(...latencies));
+  }
+
+  function xFor(position, count) {
+    if (count <= 1) {
+      return dims.left + plotWidth / 2;
+    }
+    return dims.left + (position / (count - 1)) * plotWidth;
+  }
+
+  function yFor(latency, maxLatency) {
+    return dims.top + plotHeight - (latency / maxLatency) * plotHeight;
+  }
+
+  function setRange(start, end) {
+    if (!chartData.length) {
+      viewStart = 0;
+      viewEnd = 0;
+      return;
+    }
+    let nextStart = Math.round(start);
+    let nextEnd = Math.round(end);
+    if (nextEnd < nextStart) {
+      [nextStart, nextEnd] = [nextEnd, nextStart];
+    }
+    const width = Math.max(minWindow - 1, nextEnd - nextStart);
+    if (width >= chartData.length - 1) {
+      viewStart = 0;
+      viewEnd = chartData.length - 1;
+      return;
+    }
+    if (nextStart < 0) {
+      nextEnd -= nextStart;
+      nextStart = 0;
+    }
+    if (nextEnd > chartData.length - 1) {
+      const shift = nextEnd - (chartData.length - 1);
+      nextStart -= shift;
+      nextEnd -= shift;
+    }
+    viewStart = Math.max(0, nextStart);
+    viewEnd = Math.min(chartData.length - 1, Math.max(viewStart, nextEnd));
+  }
+
+  function zoomAt(centerRatio, factor) {
+    if (chartData.length <= minWindow) {
+      return;
+    }
+    const currentWidth = viewEnd - viewStart;
+    const center = viewStart + currentWidth * centerRatio;
+    const nextWidth = Math.max(minWindow - 1, Math.min(chartData.length - 1, currentWidth * factor));
+    setRange(center - nextWidth * centerRatio, center + nextWidth * (1 - centerRatio));
+    render();
+  }
+
+  function panBy(delta) {
+    const width = viewEnd - viewStart;
+    setRange(viewStart + delta, viewStart + delta + width);
+    render();
+  }
+
+  function updateRangeLabel(points) {
+    if (!chartData.length) {
+      rangeLabel.textContent = 'Current range: no chart points';
+      return;
+    }
+    const first = points[0];
+    const last = points[points.length - 1];
+    rangeLabel.textContent = `Current range: ${first.index}-${last.index} of ${originalRows} rows (${points.length} chart points)`;
+  }
+
+  function selectedLayers() {
+    return {
+      latencyLine: latencyLineToggle.checked,
+      dataPoints: dataPointsToggle.checked,
+      failedChecks: failedChecksToggle.checked
+    };
+  }
+
+  function render() {
+    clearSVG();
+    const points = visibleData();
+    updateRangeLabel(points);
+    if (!points.length) {
+      svg.appendChild(el('text', { x: 20, y: 32, 'font-size': 13, fill: '#64748b' }, 'No chart data available.'));
+      return;
+    }
+    const maxLatency = visibleLatencyMax(points);
+    const layers = selectedLayers();
+
+    svg.appendChild(el('rect', { x: 0, y: 0, width: dims.width, height: dims.height, rx: 8, fill: '#f8fafc' }));
+    svg.appendChild(el('line', { x1: dims.left, y1: dims.top + plotHeight, x2: dims.left + plotWidth, y2: dims.top + plotHeight, stroke: '#94a3b8' }));
+    svg.appendChild(el('line', { x1: dims.left, y1: dims.top, x2: dims.left, y2: dims.top + plotHeight, stroke: '#94a3b8' }));
+
+    for (let i = 0; i <= 4; i++) {
+      const y = dims.top + plotHeight - (i / 4) * plotHeight;
+      const value = maxLatency * i / 4;
+      svg.appendChild(el('line', { x1: dims.left, y1: y.toFixed(1), x2: (dims.left + plotWidth).toFixed(1), y2: y.toFixed(1), stroke: '#e2e8f0' }));
+      svg.appendChild(el('text', { x: dims.left - 8, y: (y + 4).toFixed(1), 'text-anchor': 'end', 'font-size': 11, fill: '#475569' }, value.toFixed(1)));
+    }
+
+    let currentSegment = [];
+    const segments = [];
+    function closeSegment() {
+      if (currentSegment.length > 1) {
+        segments.push(currentSegment);
+      }
+      currentSegment = [];
+    }
+
+    points.forEach((point, position) => {
+      const x = xFor(position, points.length);
+      if (!point.success) {
+        closeSegment();
+        return;
+      }
+      const y = yFor(point.latencyMs, maxLatency);
+      currentSegment.push({ x, y });
+    });
+    closeSegment();
+
+    if (layers.latencyLine) {
+      segments.forEach(segment => {
+        const path = segment.map((point, index) => `${index ? 'L' : 'M'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(' ');
+        svg.appendChild(el('path', { d: path, fill: 'none', stroke: '#2563eb', 'stroke-width': 2.5 }));
+      });
+    }
+    if (layers.failedChecks) {
+      points.forEach((point, position) => {
+        if (point.success) {
+          return;
+        }
+        const x = xFor(position, points.length);
+        svg.appendChild(el('line', { x1: x.toFixed(1), y1: dims.top + 10, x2: x.toFixed(1), y2: dims.top + plotHeight, stroke: '#dc2626', 'stroke-width': 2 }));
+        const marker = el('circle', { cx: x.toFixed(1), cy: dims.top + 10, r: 3, fill: '#dc2626' });
+        marker.appendChild(el('title', {}, `${point.label}: ${point.error || 'failed'}`));
+        svg.appendChild(marker);
+      });
+    }
+    if (layers.dataPoints) {
+      points.forEach((point, position) => {
+        if (!point.success) {
+          return;
+        }
+        const x = xFor(position, points.length);
+        const y = yFor(point.latencyMs, maxLatency);
+        const dot = el('circle', { cx: x.toFixed(1), cy: y.toFixed(1), r: 3, fill: '#2563eb' });
+        dot.appendChild(el('title', {}, `${point.label}: ${point.latencyMs.toFixed(3)} ms`));
+        svg.appendChild(dot);
+      });
+    }
+
+    if (!layers.latencyLine && !layers.dataPoints && !layers.failedChecks) {
+      svg.appendChild(el('text', { x: dims.left + plotWidth / 2, y: dims.top + plotHeight / 2, 'text-anchor': 'middle', 'font-size': 14, fill: '#64748b' }, 'No chart layers selected.'));
+    }
+
+    svg.appendChild(el('text', { x: dims.left + plotWidth - 45, y: dims.height - 14, 'font-size': 12, fill: '#475569' }, 'attempt'));
+    svg.appendChild(el('text', { x: 8, y: dims.top - 8, 'font-size': 12, fill: '#475569' }, 'latency ms'));
+  }
+
+  resetButton.addEventListener('click', () => {
+    setRange(0, chartData.length - 1);
+    render();
+  });
+  zoomInButton.addEventListener('click', () => zoomAt(0.5, 0.5));
+  zoomOutButton.addEventListener('click', () => zoomAt(0.5, 2));
+  panLeftButton.addEventListener('click', () => panBy(-Math.max(1, Math.round((viewEnd - viewStart + 1) * 0.25))));
+  panRightButton.addEventListener('click', () => panBy(Math.max(1, Math.round((viewEnd - viewStart + 1) * 0.25))));
+  [latencyLineToggle, dataPointsToggle, failedChecksToggle].forEach(toggle => {
+    toggle.addEventListener('change', render);
+  });
+  svg.addEventListener('wheel', event => {
+    event.preventDefault();
+    const rect = svg.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    zoomAt(ratio, event.deltaY < 0 ? 0.8 : 1.25);
+  }, { passive: false });
+  svg.addEventListener('pointerdown', event => {
+    dragging = true;
+    dragStartX = event.clientX;
+    dragStartViewStart = viewStart;
+    dragStartViewEnd = viewEnd;
+    svg.setPointerCapture(event.pointerId);
+  });
+  svg.addEventListener('pointermove', event => {
+    if (!dragging) {
+      return;
+    }
+    const rect = svg.getBoundingClientRect();
+    const width = dragStartViewEnd - dragStartViewStart;
+    const pointsPerPixel = (width + 1) / Math.max(1, rect.width);
+    const delta = Math.round((dragStartX - event.clientX) * pointsPerPixel);
+    setRange(dragStartViewStart + delta, dragStartViewEnd + delta);
+    render();
+  });
+  svg.addEventListener('pointerup', event => {
+    dragging = false;
+    svg.releasePointerCapture(event.pointerId);
+  });
+  svg.addEventListener('pointercancel', () => {
+    dragging = false;
+  });
+  svg.addEventListener('dblclick', () => {
+    setRange(0, chartData.length - 1);
+    render();
+  });
+
+  render();
+})();
+</script>
 </body>
 </html>
