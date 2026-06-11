@@ -182,7 +182,7 @@ For very large CSV files, advanced users can use `tools/viewer.html` from the re
 
 No data is uploaded; the CSV is processed locally by the browser.
 
-The standalone viewer loads Plotly from a CDN. Internet access is required for viewer charts unless Plotly is vendored locally.
+The standalone viewer loads Plotly.js from a CDN for chart rendering; Plotly.js is licensed under the MIT License. Internet access is required for viewer charts unless Plotly is vendored locally.
 
 ## Development
 
