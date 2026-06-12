@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"encoding/csv"
@@ -260,9 +260,7 @@ func TestHelperProcess(t *testing.T) {
 	}
 	for i, arg := range os.Args {
 		if arg == "--" {
-			os.Args = append([]string{os.Args[0]}, os.Args[i+1:]...)
-			main()
-			return
+			os.Exit(Run(os.Args[i+1:], "dev"))
 		}
 	}
 	os.Exit(2)

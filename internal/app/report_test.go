@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"encoding/json"
@@ -319,7 +319,7 @@ func TestRunReportCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if code := run([]string{"report", csvPath, "-o", htmlPath}); code != 0 {
+	if code := Run([]string{"report", csvPath, "-o", htmlPath}, "dev"); code != 0 {
 		t.Fatalf("run report exit code = %d, want 0", code)
 	}
 	content, err := os.ReadFile(htmlPath)

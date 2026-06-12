@@ -1,19 +1,16 @@
-package main
+package app
 
 import (
 	"context"
 	"encoding/csv"
 	"flag"
 	"fmt"
+	"io"
 	"net"
-	"os"
-	"os/signal"
 	"strconv"
 	"strings"
 	"time"
 )
-
-var version = "dev"
 
 var useColor = true
 
@@ -59,20 +56,20 @@ func (s *stats) average() float64 {
 	return s.total / float64(s.connects)
 }
 
-func (s *stats) print() {
+func (s *stats) printTo(w io.Writer) {
 	pct := 0.0
 	if s.attempts > 0 {
 		pct = float64(s.failures) / float64(s.attempts) * 100
 	}
-	fmt.Println()
-	fmt.Println("TCP check statistics:")
-	fmt.Printf("\tAttempted = %s, Connected = %s, Failed = %s (%s)\n",
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "TCP check statistics:")
+	fmt.Fprintf(w, "\tAttempted = %s, Connected = %s, Failed = %s (%s)\n",
 		col(colorBlue, fmt.Sprintf("%d", s.attempts)),
 		col(colorBlue, fmt.Sprintf("%d", s.connects)),
 		col(colorBlue, fmt.Sprintf("%d", s.failures)),
 		col(colorBlue, fmt.Sprintf("%.2f%%", pct)))
-	fmt.Println("Connection latency summary:")
-	fmt.Printf("\tMinimum = %s, Maximum = %s, Average = %s\n",
+	fmt.Fprintln(w, "Connection latency summary:")
+	fmt.Fprintf(w, "\tMinimum = %s, Maximum = %s, Average = %s\n",
 		col(colorBlue, fmt.Sprintf("%.2fms", s.min)),
 		col(colorBlue, fmt.Sprintf("%.2fms", s.max)),
 		col(colorBlue, fmt.Sprintf("%.2fms", s.average())))
@@ -167,7 +164,8 @@ func dialTarget(network, address string, timeout time.Duration) (float64, error)
 	if err != nil {
 		return ms, err
 	}
-	return ms, conn.Close()
+	_ = conn.Close()
+	return ms, nil
 }
 
 func flagWasSet(fs *flag.FlagSet, name string) bool {
@@ -180,22 +178,23 @@ func flagWasSet(fs *flag.FlagSet, name string) bool {
 	return found
 }
 
-func main() {
-	os.Exit(run(os.Args[1:]))
-}
-
-func run(args []string) int {
+func Run(args []string, buildVersion string) int {
 	if len(args) > 0 && args[0] == "report" {
 		return runReport(args[1:])
 	}
-	return runCheck(args)
+	return runCheck(args, buildVersion)
 }
 
-func runCheck(args []string) int {
+func runCheck(args []string, buildVersion string) int {
+	return runCheckWithDeps(args, buildVersion, realCheckDeps())
+}
+
+func runCheckWithDeps(args []string, buildVersion string, deps checkDeps) int {
 	useColor = true
+	deps = fillCheckDeps(deps)
 
 	fs := flag.NewFlagSet("paping-go", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
+	fs.SetOutput(deps.stderr)
 
 	port := fs.Int("p", 0, "TCP port (required)")
 	count := fs.Int("c", -1, "number of checks (default: infinite)")
@@ -209,24 +208,24 @@ func runCheck(args []string) int {
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage:\n")
-		fmt.Fprintf(os.Stderr, "  paping-go [options] <host>\n")
-		fmt.Fprintf(os.Stderr, "  paping-go report <csv-file> -o <report.html>\n\n")
-		fmt.Fprintf(os.Stderr, "Examples:\n")
-		fmt.Fprintf(os.Stderr, "  paping-go -p 443 -c 5 example.com\n")
-		fmt.Fprintf(os.Stderr, "  paping-go -p 443 -c 100 -o results.csv example.com\n")
-		fmt.Fprintf(os.Stderr, "  paping-go report results.csv -o report.html\n\n")
-		fmt.Fprintf(os.Stderr, "Options:\n")
-		fmt.Fprintf(os.Stderr, "  -p N        TCP port (required)\n")
-		fmt.Fprintf(os.Stderr, "  -c N        number of checks (-1 = infinite, default: -1)\n")
-		fmt.Fprintf(os.Stderr, "  -d DURATION run for duration; cannot be combined with -c\n")
-		fmt.Fprintf(os.Stderr, "  -r N        requests per second (default: 1, e.g. 0.5, 2, 10)\n")
-		fmt.Fprintf(os.Stderr, "  -t N        timeout in milliseconds (default: 1000)\n")
-		fmt.Fprintf(os.Stderr, "  -4          force IPv4\n")
-		fmt.Fprintf(os.Stderr, "  -6          force IPv6\n")
-		fmt.Fprintf(os.Stderr, "  -o FILE     write results to CSV file\n")
-		fmt.Fprintf(os.Stderr, "  -nocolor    disable color output\n")
-		fmt.Fprintf(os.Stderr, "  -version    print version and exit\n")
+		fmt.Fprintf(deps.stderr, "Usage:\n")
+		fmt.Fprintf(deps.stderr, "  paping-go [options] <host>\n")
+		fmt.Fprintf(deps.stderr, "  paping-go report <csv-file> -o <report.html>\n\n")
+		fmt.Fprintf(deps.stderr, "Examples:\n")
+		fmt.Fprintf(deps.stderr, "  paping-go -p 443 -c 5 example.com\n")
+		fmt.Fprintf(deps.stderr, "  paping-go -p 443 -c 100 -o results.csv example.com\n")
+		fmt.Fprintf(deps.stderr, "  paping-go report results.csv -o report.html\n\n")
+		fmt.Fprintf(deps.stderr, "Options:\n")
+		fmt.Fprintf(deps.stderr, "  -p N        TCP port (required)\n")
+		fmt.Fprintf(deps.stderr, "  -c N        number of checks (-1 = infinite, default: -1)\n")
+		fmt.Fprintf(deps.stderr, "  -d DURATION run for duration; cannot be combined with -c\n")
+		fmt.Fprintf(deps.stderr, "  -r N        requests per second (default: 1, e.g. 0.5, 2, 10)\n")
+		fmt.Fprintf(deps.stderr, "  -t N        timeout in milliseconds (default: 1000)\n")
+		fmt.Fprintf(deps.stderr, "  -4          force IPv4\n")
+		fmt.Fprintf(deps.stderr, "  -6          force IPv6\n")
+		fmt.Fprintf(deps.stderr, "  -o FILE     write results to CSV file\n")
+		fmt.Fprintf(deps.stderr, "  -nocolor    disable color output\n")
+		fmt.Fprintf(deps.stderr, "  -version    print version and exit\n")
 	}
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -238,44 +237,44 @@ func runCheck(args []string) int {
 	if *nocolor {
 		useColor = false
 	}
-	enableConsoleColors()
+	deps.enableConsoleColors()
 
-	fmt.Printf("paping-go %s\n\n", version)
+	fmt.Fprintf(deps.stdout, "paping-go %s\n\n", buildVersion)
 	if *showVersion {
 		return 0
 	}
 
 	if err := validatePort(*port); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintf(deps.stderr, "Error: %v\n", err)
 		fs.Usage()
 		return 2
 	}
 	if err := validateTimeout(*timeout); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintf(deps.stderr, "Error: %v\n", err)
 		return 2
 	}
 	if err := validateIPMode(*forceV4, *forceV6); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v.\n", err)
+		fmt.Fprintf(deps.stderr, "Error: %v.\n", err)
 		fs.Usage()
 		return 2
 	}
 	dest, err := validateDestination(fs.Args())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintf(deps.stderr, "Error: %v\n", err)
 		fs.Usage()
 		return 2
 	}
 
 	rate, rerr := parseRate(*rateStr)
 	if rerr != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", rerr)
+		fmt.Fprintf(deps.stderr, "Error: %v\n", rerr)
 		return 2
 	}
 	interval := time.Duration(float64(time.Second) / rate)
 	dur := time.Duration(*timeout) * time.Millisecond
 	runLimit, runLimitErr := validateRunLimits(*count, *runDuration, flagWasSet(fs, "c"))
 	if runLimitErr != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", runLimitErr)
+		fmt.Fprintf(deps.stderr, "Error: %v\n", runLimitErr)
 		return 2
 	}
 
@@ -288,10 +287,10 @@ func runCheck(args []string) int {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), dur)
-	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, dest)
+	addrs, err := deps.lookupIPAddr(ctx, dest)
 	cancel()
 	if err != nil || len(addrs) == 0 {
-		fmt.Fprintln(os.Stderr, col(colorRed, "Host lookup failed"))
+		fmt.Fprintln(deps.stderr, col(colorRed, "Host lookup failed"))
 		return 1
 	}
 
@@ -315,7 +314,7 @@ func runCheck(args []string) int {
 		}
 	}
 	if ip == nil {
-		fmt.Println(col(colorRed, "No matching address found for requested protocol"))
+		fmt.Fprintln(deps.stdout, col(colorRed, "No matching address found for requested protocol"))
 		return 1
 	}
 
@@ -328,11 +327,11 @@ func runCheck(args []string) int {
 
 	// Print connection info
 	if ipStr == dest {
-		fmt.Printf("Connecting to %s on %s:\n\n",
+		fmt.Fprintf(deps.stdout, "Connecting to %s on %s:\n\n",
 			col(colorYellow, dest),
 			col(colorYellow, fmt.Sprintf("TCP %d", *port)))
 	} else {
-		fmt.Printf("Connecting to %s [%s] on %s:\n\n",
+		fmt.Fprintf(deps.stdout, "Connecting to %s [%s] on %s:\n\n",
 			col(colorYellow, dest),
 			col(colorYellow, ipStr),
 			col(colorYellow, fmt.Sprintf("TCP %d", *port)))
@@ -346,22 +345,22 @@ func runCheck(args []string) int {
 	// Parse duration limit
 	var deadline time.Time
 	if *runDuration != "" {
-		deadline = time.Now().Add(runLimit)
+		deadline = deps.now().Add(runLimit)
 	}
 
 	// CSV output
 	var csvWriter *csv.Writer
-	var csvFile *os.File
+	var csvFile io.WriteCloser
 	if *outFile != "" {
-		f, ferr := os.Create(*outFile)
+		f, ferr := deps.createFile(*outFile)
 		if ferr != nil {
-			fmt.Fprintf(os.Stderr, "Error: cannot create file %s: %v\n", *outFile, ferr)
+			fmt.Fprintf(deps.stderr, "Error: cannot create file %s: %v\n", *outFile, ferr)
 			return 2
 		}
 		csvFile = f
 		csvWriter = csv.NewWriter(f)
 		if err := writeCSVRow(csvWriter, []string{"timestamp", "host", "ip", "port", "status", "latency_ms"}); err != nil {
-			fmt.Fprintf(os.Stderr, "CSV write error: %v\n", err)
+			fmt.Fprintf(deps.stderr, "CSV write error: %v\n", err)
 			csvFile.Close()
 			return 2
 		}
@@ -369,13 +368,20 @@ func runCheck(args []string) int {
 
 	// Ctrl+C handling
 	stop := make(chan struct{})
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt)
-	defer signal.Stop(sig)
-	go func() {
-		<-sig
-		close(stop)
-	}()
+	if deps.setupInterrupt != nil {
+		sig, stopSignals := deps.setupInterrupt()
+		if stopSignals != nil {
+			defer stopSignals()
+		}
+		if sig != nil {
+			go func() {
+				_, ok := <-sig
+				if ok {
+					close(stop)
+				}
+			}()
+		}
+	}
 
 	for i := 0; continuous || (!deadline.IsZero()) || i < n; i++ {
 		select {
@@ -385,13 +391,13 @@ func runCheck(args []string) int {
 		}
 
 		// Check duration limit
-		if !deadline.IsZero() && time.Now().After(deadline) {
+		if !deadline.IsZero() && deps.now().After(deadline) {
 			break
 		}
 
 		st.attempts++
-		start := time.Now()
-		ms, dialErr := dialTarget(dialNet, addr, dur)
+		start := deps.now()
+		ms, dialErr := deps.dialTarget(dialNet, addr, dur)
 
 		if dialErr != nil {
 			st.failures++
@@ -399,28 +405,28 @@ func runCheck(args []string) int {
 			errMsg := ""
 			if netErr, ok := dialErr.(net.Error); ok && netErr.Timeout() {
 				errMsg = "timeout"
-				fmt.Println(col(colorRed, "Connection timed out"))
+				fmt.Fprintln(deps.stdout, col(colorRed, "Connection timed out"))
 			} else {
 				errMsg = dialErr.Error()
-				fmt.Println(col(colorRed, fmt.Sprintf("Connection failed: %v", dialErr)))
+				fmt.Fprintln(deps.stdout, col(colorRed, fmt.Sprintf("Connection failed: %v", dialErr)))
 			}
 			if csvWriter != nil {
 				if err := writeCSVRow(csvWriter, csvResultRow(start, dest, ipStr, *port, errMsg, "")); err != nil {
-					fmt.Fprintf(os.Stderr, "CSV write error: %v\n", err)
+					fmt.Fprintf(deps.stderr, "CSV write error: %v\n", err)
 					exitCode = 1
 					goto done
 				}
 			}
 		} else {
 			st.recordSuccess(ms)
-			fmt.Printf("Connected to %s: time=%s protocol=%s port=%s\n",
+			fmt.Fprintf(deps.stdout, "Connected to %s: time=%s protocol=%s port=%s\n",
 				col(colorGreen, ipStr),
 				col(colorGreen, fmt.Sprintf("%.2fms", ms)),
 				col(colorGreen, "TCP"),
 				col(colorGreen, fmt.Sprintf("%d", *port)))
 			if csvWriter != nil {
 				if err := writeCSVRow(csvWriter, csvResultRow(start, dest, ipStr, *port, "ok", fmt.Sprintf("%.3f", ms))); err != nil {
-					fmt.Fprintf(os.Stderr, "CSV write error: %v\n", err)
+					fmt.Fprintf(deps.stderr, "CSV write error: %v\n", err)
 					exitCode = 1
 					goto done
 				}
@@ -429,25 +435,24 @@ func runCheck(args []string) int {
 
 		// Wait between attempts
 		if continuous || (!deadline.IsZero()) || i+1 < n {
-			wait := interval - time.Since(start)
+			wait := interval - deps.now().Sub(start)
 			if wait > 0 {
 				select {
 				case <-stop:
 					goto done
-				case <-time.After(wait):
+				case <-deps.after(wait):
 				}
 			}
 		}
 	}
 
 done:
-	signal.Stop(sig)
 	if csvFile != nil {
 		if err := csvFile.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "CSV close error: %v\n", err)
+			fmt.Fprintf(deps.stderr, "CSV close error: %v\n", err)
 			exitCode = 1
 		}
 	}
-	st.print()
+	st.printTo(deps.stdout)
 	return exitCode
 }

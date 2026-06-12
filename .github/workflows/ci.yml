@@ -40,12 +40,21 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Test
-        run: go test ./...
+      - name: Test with coverage
+        run: go test -coverprofile=coverage.out ./...
+
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out
+
+      - name: Enforce coverage threshold
+        run: |
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {print substr($3, 1, length($3)-1)}')
+          echo "Total coverage: ${total}%"
+          awk -v total="$total" 'BEGIN { if (total + 0 < 85) exit 1 }'
 
       - name: Race tests
         if: matrix.go-version == 'stable'
         run: go test -race ./...
 
       - name: Build
-        run: go build -o paping-go .
+        run: go build -o paping-go ./cmd/paping-go

@@ -1,13 +1,13 @@
 # Built binaries
-paping-go
-paping-go.exe
-portpulse
-portpulse.exe
-*-linux-amd64
-*-linux-arm64
-*-windows-amd64.exe
-*-darwin-amd64
-*-darwin-arm64
+/paping-go
+/paping-go.exe
+/portpulse
+/portpulse.exe
+/*-linux-amd64
+/*-linux-arm64
+/*-windows-amd64.exe
+/*-darwin-amd64
+/*-darwin-arm64
 
 # Generated output
 results.csv
@@ -21,6 +21,7 @@ temp/
 dist/
 build/
 coverage.out
+*.coverprofile
 node_modules/
 
 # OS/editor
