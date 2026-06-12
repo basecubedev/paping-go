@@ -21,6 +21,7 @@ temp/
 dist/
 build/
 coverage.out
+node_modules/
 
 # OS/editor
 .DS_Store

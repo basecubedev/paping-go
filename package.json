@@ -1,0 +1,11 @@
+{
+  "name": "paping-go-viewer-assets",
+  "private": true,
+  "description": "Development metadata for vendoring optional paping-go viewer assets.",
+  "scripts": {
+    "vendor": "mkdir -p tools/vendor && cp node_modules/plotly.js-dist-min/plotly.min.js tools/vendor/plotly.min.js && cp node_modules/plotly.js-dist-min/LICENSE tools/vendor/plotly.min.js.LICENSE.txt"
+  },
+  "devDependencies": {
+    "plotly.js-dist-min": "^2.35.0"
+  }
+}

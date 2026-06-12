@@ -13,7 +13,7 @@ This repository does not include original paping source code and is not affiliat
 
 The `paping-go` binary uses only the Go standard library and does not bundle third-party Go dependencies.
 
-The optional standalone CSV viewer in `tools/viewer.html` loads Plotly.js from a CDN for chart rendering.
+The optional standalone CSV viewer in `tools/viewer.html` includes a locally vendored Plotly.js browser bundle for chart rendering. The bundled Plotly license is stored in `tools/vendor/plotly.min.js.LICENSE.txt`.
 
 Plotly.js:
 Copyright (c) Plotly Technologies Inc.
