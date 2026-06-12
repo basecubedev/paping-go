@@ -60,7 +60,7 @@ sudo apt install ./paping-go_0.1.1_amd64.deb
 After installation, run:
 
 ```bash
-paping-go -version
+paping-go --version
 paping-go -p 443 -c 3 example.com
 ```
 

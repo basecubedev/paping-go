@@ -105,6 +105,36 @@ jobs:
             --packager deb \
             --target "dist/paping-go_${VERSION}_arm64.deb"
 
+      - name: Verify Debian package structure
+        run: |
+          set -euo pipefail
+
+          test -f "dist/paping-go_${GITHUB_REF_NAME#v}_amd64.deb"
+          test -f "dist/paping-go_${GITHUB_REF_NAME#v}_arm64.deb"
+
+          for pkg in dist/paping-go_*.deb; do
+            echo "Inspecting $pkg"
+            contents_file="$(mktemp)"
+            dpkg-deb --info "$pkg"
+            dpkg-deb --contents "$pkg" | tee "$contents_file"
+            grep -E '/usr/bin/paping-go$' "$contents_file"
+            grep -E '/usr/share/doc/paping-go/README.md$' "$contents_file"
+            grep -E '/usr/share/doc/paping-go/LICENSE$' "$contents_file"
+          done
+
+      - name: Install amd64 Debian package smoke test
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y ./dist/paping-go_${GITHUB_REF_NAME#v}_amd64.deb
+
+          command -v paping-go
+          paping-go --version
+          paping-go --help >/dev/null
+
+          sudo apt-get remove -y paping-go
+
       - name: Generate checksums
         working-directory: dist
         run: sha256sum paping-go-* *.deb > SHA256SUMS
