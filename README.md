@@ -26,7 +26,7 @@ It performs ping-like TCP port reachability checks and reports connection timing
 - Optional colored output
 - CSV output for later analysis
 - Built-in HTML report generation from CSV
-- Simple standalone HTML viewer for manual CSV inspection
+- Optional standalone HTML viewer for large CSV inspection
 - Cross-platform builds for Linux, Windows and macOS
 
 ## Installation
@@ -182,7 +182,9 @@ For very large CSV files, advanced users can use `tools/viewer.html` from the re
 
 No data is uploaded; the CSV is processed locally by the browser.
 
-The standalone viewer loads Plotly.js from a CDN for chart rendering; Plotly.js is licensed under the MIT License. Internet access is required for viewer charts unless Plotly is vendored locally.
+The standalone viewer provides display toggles for the latency line, data points, and failed checks. Its filter controls which CSV rows are included, while the display controls choose how those rows are drawn.
+
+The viewer uses a locally vendored Plotly.js file from `tools/vendor/plotly.min.js`, so it works offline from a repository checkout. The bundled Plotly license is stored next to it in `tools/vendor/plotly.min.js.LICENSE.txt`.
 
 ## Development
 
@@ -198,6 +200,13 @@ go vet ./...
 go test ./...
 go test -race ./...
 go build -o paping-go .
+```
+
+Update the optional standalone viewer Plotly asset:
+
+```bash
+npm install
+npm run vendor
 ```
 
 Inject a version at build time:
