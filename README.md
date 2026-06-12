@@ -47,6 +47,29 @@ go install github.com/basecubedev/paping-go/cmd/paping-go@latest
 
 Once releases are published, most users should download prebuilt binaries from GitHub Releases.
 
+## Debian/Ubuntu package
+
+Tagged releases provide Debian packages for `amd64` and `arm64`.
+
+Download the matching `.deb` file from the GitHub Release page and install it with:
+
+```bash
+sudo apt install ./paping-go_0.1.1_amd64.deb
+```
+
+After installation, run:
+
+```bash
+paping-go -version
+paping-go -p 443 -c 3 example.com
+```
+
+To remove it:
+
+```bash
+sudo apt remove paping-go
+```
+
 ## Usage
 
 ```bash
