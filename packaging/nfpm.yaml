@@ -1,0 +1,35 @@
+name: paping-go
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${NFPM_VERSION}
+section: utils
+priority: optional
+maintainer: basecubedev <contact@basecubedev.de>
+description: TCP port ping utility written in Go
+homepage: https://github.com/basecubedev/paping-go
+license: MIT
+
+contents:
+  - src: ${NFPM_BINARY}
+    dst: /usr/bin/paping-go
+    expand: true
+    file_info:
+      mode: 0755
+
+  - src: ./README.md
+    dst: /usr/share/doc/paping-go/README.md
+
+  - src: ./LICENSE
+    dst: /usr/share/doc/paping-go/LICENSE
+
+  - src: ./NOTICE.md
+    dst: /usr/share/doc/paping-go/NOTICE.md
+
+  - src: ./CHANGELOG.md
+    dst: /usr/share/doc/paping-go/CHANGELOG.md
+
+  - src: ./examples/README.md
+    dst: /usr/share/doc/paping-go/examples/README.md
+
+  - src: ./examples/localhost-demo.csv
+    dst: /usr/share/doc/paping-go/examples/localhost-demo.csv
