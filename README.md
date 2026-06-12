@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/basecubedev/paping-go/actions/workflows/ci.yml/badge.svg)](https://github.com/basecubedev/paping-go/actions/workflows/ci.yml)
 [![Build](https://github.com/basecubedev/paping-go/actions/workflows/build.yml/badge.svg)](https://github.com/basecubedev/paping-go/actions/workflows/build.yml)
+![Tests](https://img.shields.io/badge/tests-%3E150-blue)
+![Coverage](https://img.shields.io/badge/coverage-%3E90%25-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
 Modern Go rewrite inspired by paping.
@@ -34,13 +36,13 @@ It performs ping-like TCP port reachability checks and reports connection timing
 Build from source:
 
 ```bash
-go build -o paping-go .
+go build -o paping-go ./cmd/paping-go
 ```
 
 Install with Go:
 
 ```bash
-go install github.com/basecubedev/paping-go@latest
+go install github.com/basecubedev/paping-go/cmd/paping-go@latest
 ```
 
 Once releases are published, most users should download prebuilt binaries from GitHub Releases.
@@ -161,7 +163,7 @@ The preview was generated from a local test server on `127.0.0.1:8080`.
 
 ```bash
 python3 -m http.server 8080
-go build -o paping-go .
+go build -o paping-go ./cmd/paping-go
 ./paping-go -p 8080 -c 100 -o examples/localhost-demo.csv 127.0.0.1
 ./paping-go report examples/localhost-demo.csv -o /tmp/paping-go-report.html
 ```
@@ -199,7 +201,7 @@ go fmt ./...
 go vet ./...
 go test ./...
 go test -race ./...
-go build -o paping-go .
+go build -o paping-go ./cmd/paping-go
 ```
 
 Update the optional standalone viewer Plotly asset:
@@ -213,7 +215,15 @@ Inject a version at build time:
 
 ```bash
 VERSION=v0.1.0
-go build -ldflags "-X main.version=${VERSION}" -o paping-go .
+go build -ldflags "-X main.version=${VERSION}" -o paping-go ./cmd/paping-go
+```
+
+Create clean source archives from git so generated files such as `.git/`,
+`node_modules/`, coverage profiles, and local build outputs are excluded:
+
+```bash
+git archive --format=tar.gz --output=paping-go.tar.gz HEAD
+git archive --format=zip --output=paping-go.zip HEAD
 ```
 
 ## Background
