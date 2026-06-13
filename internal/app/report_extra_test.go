@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -250,7 +251,46 @@ func TestRunReportOutputFileModes(t *testing.T) {
 			if !strings.Contains(string(content), "paping-go report") {
 				t.Fatalf("report missing expected content:\n%s", content)
 			}
+			tmpFiles, err := filepath.Glob(filepath.Join(dir, ".report.html-*.tmp"))
+			if err != nil {
+				t.Fatalf("glob failed: %v", err)
+			}
+			if len(tmpFiles) != 0 {
+				t.Fatalf("temporary files left behind: %#v", tmpFiles)
+			}
 		})
+	}
+}
+
+func TestWriteOutputFileAtomicallyKeepsExistingFileOnWriteError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.html")
+	if err := os.WriteFile(path, []byte("old report"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := writeOutputFileAtomicallyWithWriter(path, []byte("new report"), defaultOutputMode, func(f *os.File, data []byte) error {
+		if _, writeErr := f.Write([]byte("partial")); writeErr != nil {
+			t.Fatalf("setup write failed: %v", writeErr)
+		}
+		return errors.New("forced write failure")
+	})
+	if err == nil || !strings.Contains(err.Error(), "forced write failure") {
+		t.Fatalf("error = %v, want forced write failure", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if string(content) != "old report" {
+		t.Fatalf("content = %q, want old report", content)
+	}
+	tmpFiles, err := filepath.Glob(filepath.Join(dir, ".report.html-*.tmp"))
+	if err != nil {
+		t.Fatalf("glob failed: %v", err)
+	}
+	if len(tmpFiles) != 0 {
+		t.Fatalf("temporary files left behind: %#v", tmpFiles)
 	}
 }
 

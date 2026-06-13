@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -129,7 +130,7 @@ func runReport(args []string) int {
 		fmt.Fprintf(os.Stderr, "Error: failed to generate report: %v\n", err)
 		return 2
 	}
-	if err := writeOutputFile(outputPath, []byte(html), options.OutputMode); err != nil {
+	if err := writeOutputFileAtomically(outputPath, []byte(html), options.OutputMode); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to write report: %v\n", err)
 		return 2
 	}
@@ -259,6 +260,53 @@ func writeOutputFile(path string, data []byte, mode os.FileMode) error {
 		return io.ErrShortWrite
 	}
 	return closeErr
+}
+
+func writeOutputFileAtomically(path string, data []byte, mode os.FileMode) error {
+	return writeOutputFileAtomicallyWithWriter(path, data, mode, writeAll)
+}
+
+func writeOutputFileAtomicallyWithWriter(path string, data []byte, mode os.FileMode, write func(*os.File, []byte) error) error {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	tmp, err := os.CreateTemp(dir, "."+base+"-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if err := write(tmp, data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, mode); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
+}
+
+func writeAll(f *os.File, data []byte) error {
+	n, err := f.Write(data)
+	if err != nil {
+		return err
+	}
+	if n != len(data) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 func readReportCSVFile(path string) ([]ReportRow, error) {
