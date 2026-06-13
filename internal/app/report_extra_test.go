@@ -82,6 +82,11 @@ func TestParseReportArgsChartOptions(t *testing.T) {
 			want: reportOptions{MaxChartPoints: defaultChartLimit, FullChart: true, OutputMode: defaultOutputMode},
 		},
 		{
+			name: "no clobber",
+			args: []string{"input.csv", "-o", "out.html", "--no-clobber"},
+			want: reportOptions{MaxChartPoints: defaultChartLimit, OutputMode: defaultOutputMode, NoClobber: true},
+		},
+		{
 			name: "output mode",
 			args: []string{"input.csv", "-o", "out.html", "--output-mode", "0644"},
 			want: reportOptions{MaxChartPoints: defaultChartLimit, OutputMode: sharedOutputMode},
@@ -262,6 +267,62 @@ func TestRunReportOutputFileModes(t *testing.T) {
 	}
 }
 
+func TestRunReportNoClobberRejectsExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := validReportCSV(t, dir)
+	htmlPath := filepath.Join(dir, "report.html")
+	if err := os.WriteFile(htmlPath, []byte("old report"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := runReport([]string{csvPath, "-o", htmlPath, "--no-clobber"}); got != 2 {
+		t.Fatalf("runReport exit = %d, want 2", got)
+	}
+	content, err := os.ReadFile(htmlPath)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if string(content) != "old report" {
+		t.Fatalf("content = %q, want old report", content)
+	}
+	tmpFiles, err := filepath.Glob(filepath.Join(dir, ".report.html-*.tmp"))
+	if err != nil {
+		t.Fatalf("glob failed: %v", err)
+	}
+	if len(tmpFiles) != 0 {
+		t.Fatalf("temporary files left behind: %#v", tmpFiles)
+	}
+}
+
+func TestWriteOutputFileAtomicallyNoClobberRejectsLateExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.html")
+
+	err := writeOutputFileAtomicallyWithWriter(path, []byte("new report"), defaultOutputMode, true, func(f *os.File, data []byte) error {
+		if writeErr := writeAll(f, data); writeErr != nil {
+			return writeErr
+		}
+		return os.WriteFile(path, []byte("late report"), 0o600)
+	})
+	if err == nil || !strings.Contains(err.Error(), "output file already exists: "+path) {
+		t.Fatalf("error = %v, want no-clobber error", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if string(content) != "late report" {
+		t.Fatalf("content = %q, want late report", content)
+	}
+	tmpFiles, err := filepath.Glob(filepath.Join(dir, ".report.html-*.tmp"))
+	if err != nil {
+		t.Fatalf("glob failed: %v", err)
+	}
+	if len(tmpFiles) != 0 {
+		t.Fatalf("temporary files left behind: %#v", tmpFiles)
+	}
+}
+
 func TestWriteOutputFileAtomicallyKeepsExistingFileOnWriteError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "report.html")
@@ -269,7 +330,7 @@ func TestWriteOutputFileAtomicallyKeepsExistingFileOnWriteError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := writeOutputFileAtomicallyWithWriter(path, []byte("new report"), defaultOutputMode, func(f *os.File, data []byte) error {
+	err := writeOutputFileAtomicallyWithWriter(path, []byte("new report"), defaultOutputMode, false, func(f *os.File, data []byte) error {
 		if _, writeErr := f.Write([]byte("partial")); writeErr != nil {
 			t.Fatalf("setup write failed: %v", writeErr)
 		}

@@ -16,7 +16,7 @@ type checkDeps struct {
 	dialTarget          func(network, address string, timeout time.Duration) (float64, error)
 	now                 func() time.Time
 	after               func(time.Duration) <-chan time.Time
-	createFile          func(name string, mode os.FileMode) (io.WriteCloser, error)
+	createFile          func(name string, mode os.FileMode, noClobber bool) (io.WriteCloser, error)
 	enableConsoleColors func()
 	setupInterrupt      func() (<-chan os.Signal, func())
 }
@@ -29,8 +29,8 @@ func realCheckDeps() checkDeps {
 		dialTarget:   dialTarget,
 		now:          time.Now,
 		after:        time.After,
-		createFile: func(name string, mode os.FileMode) (io.WriteCloser, error) {
-			return createOutputFile(name, mode)
+		createFile: func(name string, mode os.FileMode, noClobber bool) (io.WriteCloser, error) {
+			return createOutputFile(name, mode, noClobber)
 		},
 		enableConsoleColors: enableConsoleColors,
 		setupInterrupt:      setupInterrupt,
@@ -66,8 +66,8 @@ func fillCheckDeps(deps checkDeps) checkDeps {
 		deps.after = time.After
 	}
 	if deps.createFile == nil {
-		deps.createFile = func(name string, mode os.FileMode) (io.WriteCloser, error) {
-			return createOutputFile(name, mode)
+		deps.createFile = func(name string, mode os.FileMode, noClobber bool) (io.WriteCloser, error) {
+			return createOutputFile(name, mode, noClobber)
 		}
 	}
 	if deps.enableConsoleColors == nil {

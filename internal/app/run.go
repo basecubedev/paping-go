@@ -246,6 +246,7 @@ func runCheckWithDeps(args []string, buildVersion string, deps checkDeps) int {
 	allIPs := fs.Bool("all-ips", false, "test all resolved IP addresses; -r controls full IP cycles per second")
 	outFile := fs.String("o", "", "write results to CSV file")
 	outputModeStr := fs.String("output-mode", "0600", "output file permissions (0600 or 0644)")
+	noClobber := fs.Bool("no-clobber", false, "fail if the output file already exists")
 	runDuration := fs.String("d", "", "run for duration (e.g. 30s, 5m, 1h)")
 	rateStr := fs.String("r", "1", "requests per second (e.g. 0.5, 1, 5)")
 	showVersion := fs.Bool("version", false, "print version and exit")
@@ -253,7 +254,7 @@ func runCheckWithDeps(args []string, buildVersion string, deps checkDeps) int {
 	fs.Usage = func() {
 		fmt.Fprintf(deps.stderr, "Usage:\n")
 		fmt.Fprintf(deps.stderr, "  paping-go [options] <host>\n")
-		fmt.Fprintf(deps.stderr, "  paping-go report <csv-file> -o <report.html> [--max-chart-points N] [--full-chart] [--output-mode 0600|0644]\n\n")
+		fmt.Fprintf(deps.stderr, "  paping-go report <csv-file> -o <report.html> [--max-chart-points N] [--full-chart] [--output-mode 0600|0644] [--no-clobber]\n\n")
 		fmt.Fprintf(deps.stderr, "Examples:\n")
 		fmt.Fprintf(deps.stderr, "  paping-go -p 443 -c 5 example.com\n")
 		fmt.Fprintf(deps.stderr, "  paping-go -p 443 -c 100 -o results.csv example.com\n")
@@ -270,6 +271,7 @@ func runCheckWithDeps(args []string, buildVersion string, deps checkDeps) int {
 		fmt.Fprintf(deps.stderr, "  -all-ips    test all resolved IP addresses matching -4/-6; -r controls full IP cycles per second\n")
 		fmt.Fprintf(deps.stderr, "  -o FILE     write results to CSV file\n")
 		fmt.Fprintf(deps.stderr, "  -output-mode MODE  output file permissions: 0600 or 0644 (default: 0600)\n")
+		fmt.Fprintf(deps.stderr, "  -no-clobber fail if the output file already exists\n")
 		fmt.Fprintf(deps.stderr, "  -nocolor    disable color output\n")
 		fmt.Fprintf(deps.stderr, "  -version    print version and exit\n")
 	}
@@ -387,7 +389,7 @@ func runCheckWithDeps(args []string, buildVersion string, deps checkDeps) int {
 	var csvWriter *csv.Writer
 	var csvFile io.WriteCloser
 	if *outFile != "" {
-		f, ferr := deps.createFile(*outFile, outputMode)
+		f, ferr := deps.createFile(*outFile, outputMode, *noClobber)
 		if ferr != nil {
 			fmt.Fprintf(deps.stderr, "Error: cannot create file %s: %v\n", *outFile, ferr)
 			return 2

@@ -78,6 +78,7 @@ type reportOptions struct {
 	MaxChartPoints int
 	FullChart      bool
 	OutputMode     os.FileMode
+	NoClobber      bool
 }
 
 type ChartInfo struct {
@@ -97,7 +98,7 @@ type ChartPoint struct {
 
 func runReport(args []string) int {
 	usage := func() {
-		fmt.Fprintf(os.Stderr, "Usage: paping-go report <csv-file> -o <report.html> [--max-chart-points N] [--full-chart] [--output-mode 0600|0644]\n")
+		fmt.Fprintf(os.Stderr, "Usage: paping-go report <csv-file> -o <report.html> [--max-chart-points N] [--full-chart] [--output-mode 0600|0644] [--no-clobber]\n")
 	}
 
 	csvPath, outputPath, options, help, err := parseReportArgs(args)
@@ -130,7 +131,7 @@ func runReport(args []string) int {
 		fmt.Fprintf(os.Stderr, "Error: failed to generate report: %v\n", err)
 		return 2
 	}
-	if err := writeOutputFileAtomically(outputPath, []byte(html), options.OutputMode); err != nil {
+	if err := writeOutputFileAtomically(outputPath, []byte(html), options.OutputMode, options.NoClobber); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to write report: %v\n", err)
 		return 2
 	}
@@ -163,6 +164,8 @@ func parseReportArgs(args []string) (csvPath, outputPath string, options reportO
 			}
 		case arg == "--full-chart":
 			options.FullChart = true
+		case arg == "--no-clobber":
+			options.NoClobber = true
 		case arg == "--max-chart-points":
 			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
 				return "", "", options, false, fmt.Errorf("missing value for --max-chart-points")
@@ -226,13 +229,24 @@ func parseOutputMode(value string) (os.FileMode, error) {
 	}
 }
 
-func createPrivateOutputFile(path string) (*os.File, error) {
-	return createOutputFile(path, defaultOutputMode)
+func outputFileExistsError(path string) error {
+	return fmt.Errorf("output file already exists: %s", path)
 }
 
-func createOutputFile(path string, mode os.FileMode) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+func createPrivateOutputFile(path string) (*os.File, error) {
+	return createOutputFile(path, defaultOutputMode, false)
+}
+
+func createOutputFile(path string, mode os.FileMode, noClobber bool) (*os.File, error) {
+	flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	if noClobber {
+		flags = os.O_CREATE | os.O_WRONLY | os.O_EXCL
+	}
+	f, err := os.OpenFile(path, flags, mode)
 	if err != nil {
+		if noClobber && os.IsExist(err) {
+			return nil, outputFileExistsError(path)
+		}
 		return nil, err
 	}
 	if err := f.Chmod(mode); err != nil {
@@ -247,7 +261,7 @@ func writePrivateOutputFile(path string, data []byte) error {
 }
 
 func writeOutputFile(path string, data []byte, mode os.FileMode) error {
-	f, err := createOutputFile(path, mode)
+	f, err := createOutputFile(path, mode, false)
 	if err != nil {
 		return err
 	}
@@ -262,11 +276,19 @@ func writeOutputFile(path string, data []byte, mode os.FileMode) error {
 	return closeErr
 }
 
-func writeOutputFileAtomically(path string, data []byte, mode os.FileMode) error {
-	return writeOutputFileAtomicallyWithWriter(path, data, mode, writeAll)
+func writeOutputFileAtomically(path string, data []byte, mode os.FileMode, noClobber bool) error {
+	return writeOutputFileAtomicallyWithWriter(path, data, mode, noClobber, writeAll)
 }
 
-func writeOutputFileAtomicallyWithWriter(path string, data []byte, mode os.FileMode, write func(*os.File, []byte) error) error {
+func writeOutputFileAtomicallyWithWriter(path string, data []byte, mode os.FileMode, noClobber bool, write func(*os.File, []byte) error) error {
+	if noClobber {
+		if _, err := os.Stat(path); err == nil {
+			return outputFileExistsError(path)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
 	tmp, err := os.CreateTemp(dir, "."+base+"-*.tmp")
@@ -291,7 +313,14 @@ func writeOutputFileAtomicallyWithWriter(path string, data []byte, mode os.FileM
 	if err := os.Chmod(tmpPath, mode); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if noClobber {
+		if err := os.Link(tmpPath, path); err != nil {
+			if os.IsExist(err) {
+				return outputFileExistsError(path)
+			}
+			return err
+		}
+	} else if err := os.Rename(tmpPath, path); err != nil {
 		return err
 	}
 	cleanup = false

@@ -87,7 +87,7 @@ Options:
 ```text
 Usage:
   paping-go [options] <host>
-  paping-go report <csv-file> -o <report.html> [--max-chart-points N] [--full-chart] [--output-mode 0600|0644]
+  paping-go report <csv-file> -o <report.html> [--max-chart-points N] [--full-chart] [--output-mode 0600|0644] [--no-clobber]
 
 Examples:
   paping-go -p 443 -c 5 example.com
@@ -105,6 +105,7 @@ Examples:
   -all-ips    test all resolved IP addresses matching -4/-6; -r controls full IP cycles per second
   -o FILE     write results to CSV file
   -output-mode MODE  output file permissions: 0600 or 0644 (default: 0600)
+  -no-clobber fail if the output file already exists
   -nocolor    disable color output
   -version    print version and exit
 ```
@@ -157,6 +158,13 @@ paping-go report results.csv -o report.html --output-mode 0644
 ```
 
 Use `0644` only when the file may be readable by other local users or a webserver.
+
+Use `--no-clobber` to avoid overwriting existing output files:
+
+```bash
+paping-go -p 443 -c 10 -o results.csv --no-clobber example.com
+paping-go report results.csv -o report.html --no-clobber
+```
 
 Generate an HTML report from CSV output:
 

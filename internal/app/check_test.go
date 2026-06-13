@@ -63,7 +63,7 @@ func (r *checkRun) deps(addrs []net.IPAddr, dialResults ...dialResult) checkDeps
 			ch <- now
 			return ch
 		},
-		createFile: func(name string, mode os.FileMode) (io.WriteCloser, error) {
+		createFile: func(name string, mode os.FileMode, noClobber bool) (io.WriteCloser, error) {
 			f := &memoryWriteCloser{}
 			r.files[name] = f
 			r.modes[name] = mode
@@ -488,8 +488,8 @@ func TestRunCheckCSVOutputFileModes(t *testing.T) {
 
 			r := newCheckRun()
 			deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, dialResult{ms: 1.25})
-			deps.createFile = func(name string, mode os.FileMode) (io.WriteCloser, error) {
-				return createOutputFile(name, mode)
+			deps.createFile = func(name string, mode os.FileMode, noClobber bool) (io.WriteCloser, error) {
+				return createOutputFile(name, mode, noClobber)
 			}
 			code := runCheckWithDeps(args, "dev", deps)
 			if code != 0 {
@@ -514,10 +514,43 @@ func TestRunCheckCSVOutputFileModes(t *testing.T) {
 	}
 }
 
+func TestRunCheckCSVNoClobberRejectsExistingFile(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("Windows does not expose Unix file modes reliably")
+	}
+	path := filepath.Join(t.TempDir(), "results.csv")
+	if err := os.WriteFile(path, []byte("old csv"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := newCheckRun()
+	deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, dialResult{ms: 1.25})
+	deps.createFile = func(name string, mode os.FileMode, noClobber bool) (io.WriteCloser, error) {
+		return createOutputFile(name, mode, noClobber)
+	}
+	code := runCheckWithDeps([]string{"-nocolor", "-p", "443", "-c", "1", "-o", path, "--no-clobber", "example.com"}, "dev", deps)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, r.stdout.String(), r.stderr.String())
+	}
+	if !strings.Contains(r.stderr.String(), "output file already exists: "+path) {
+		t.Fatalf("stderr missing no-clobber error:\n%s", r.stderr.String())
+	}
+	if len(r.dials) != 0 {
+		t.Fatalf("dial calls = %#v, want none", r.dials)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if string(content) != "old csv" {
+		t.Fatalf("content = %q, want old csv", content)
+	}
+}
+
 func TestRunCheckWithDepsCSVCreateFileError(t *testing.T) {
 	r := newCheckRun()
 	deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}})
-	deps.createFile = func(name string, mode os.FileMode) (io.WriteCloser, error) {
+	deps.createFile = func(name string, mode os.FileMode, noClobber bool) (io.WriteCloser, error) {
 		return nil, errors.New("permission denied")
 	}
 
@@ -536,7 +569,7 @@ func TestRunCheckWithDepsCSVCreateFileError(t *testing.T) {
 func TestRunCheckWithDepsCSVHeaderWriteError(t *testing.T) {
 	r := newCheckRun()
 	deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}})
-	deps.createFile = func(name string, mode os.FileMode) (io.WriteCloser, error) {
+	deps.createFile = func(name string, mode os.FileMode, noClobber bool) (io.WriteCloser, error) {
 		return &failingWriteCloser{failAfter: 0}, nil
 	}
 
@@ -555,7 +588,7 @@ func TestRunCheckWithDepsCSVHeaderWriteError(t *testing.T) {
 func TestRunCheckWithDepsCSVWriteError(t *testing.T) {
 	r := newCheckRun()
 	deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, dialResult{ms: 1})
-	deps.createFile = func(name string, mode os.FileMode) (io.WriteCloser, error) {
+	deps.createFile = func(name string, mode os.FileMode, noClobber bool) (io.WriteCloser, error) {
 		return &failingWriteCloser{failAfter: 1}, nil
 	}
 
@@ -572,7 +605,7 @@ func TestRunCheckWithDepsCSVCloseError(t *testing.T) {
 	r := newCheckRun()
 	csvFile := &memoryWriteCloser{closeErr: errors.New("close failed")}
 	deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, dialResult{ms: 1})
-	deps.createFile = func(name string, mode os.FileMode) (io.WriteCloser, error) {
+	deps.createFile = func(name string, mode os.FileMode, noClobber bool) (io.WriteCloser, error) {
 		r.files[name] = csvFile
 		return csvFile, nil
 	}
