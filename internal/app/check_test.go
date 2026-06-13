@@ -58,7 +58,7 @@ func (r *checkRun) deps(addrs []net.IPAddr, dialResults ...dialResult) checkDeps
 			ch <- now
 			return ch
 		},
-		createFile: func(name string) (io.WriteCloser, error) {
+		createFile: func(name string, mode os.FileMode) (io.WriteCloser, error) {
 			f := &memoryWriteCloser{}
 			r.files[name] = f
 			return f, nil
@@ -400,7 +400,7 @@ func TestRunCheckWithDepsCSVOutputSuccessAndFailure(t *testing.T) {
 func TestRunCheckWithDepsCSVCreateFileError(t *testing.T) {
 	r := newCheckRun()
 	deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}})
-	deps.createFile = func(name string) (io.WriteCloser, error) {
+	deps.createFile = func(name string, mode os.FileMode) (io.WriteCloser, error) {
 		return nil, errors.New("permission denied")
 	}
 
@@ -419,7 +419,7 @@ func TestRunCheckWithDepsCSVCreateFileError(t *testing.T) {
 func TestRunCheckWithDepsCSVHeaderWriteError(t *testing.T) {
 	r := newCheckRun()
 	deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}})
-	deps.createFile = func(name string) (io.WriteCloser, error) {
+	deps.createFile = func(name string, mode os.FileMode) (io.WriteCloser, error) {
 		return &failingWriteCloser{failAfter: 0}, nil
 	}
 
@@ -438,7 +438,7 @@ func TestRunCheckWithDepsCSVHeaderWriteError(t *testing.T) {
 func TestRunCheckWithDepsCSVWriteError(t *testing.T) {
 	r := newCheckRun()
 	deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, dialResult{ms: 1})
-	deps.createFile = func(name string) (io.WriteCloser, error) {
+	deps.createFile = func(name string, mode os.FileMode) (io.WriteCloser, error) {
 		return &failingWriteCloser{failAfter: 1}, nil
 	}
 
@@ -455,7 +455,7 @@ func TestRunCheckWithDepsCSVCloseError(t *testing.T) {
 	r := newCheckRun()
 	csvFile := &memoryWriteCloser{closeErr: errors.New("close failed")}
 	deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, dialResult{ms: 1})
-	deps.createFile = func(name string) (io.WriteCloser, error) {
+	deps.createFile = func(name string, mode os.FileMode) (io.WriteCloser, error) {
 		r.files[name] = csvFile
 		return csvFile, nil
 	}

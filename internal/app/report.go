@@ -25,6 +25,8 @@ const (
 	largeReportRows   = 10000
 	veryLargeRows     = 100000
 	defaultChartLimit = 20000
+	defaultOutputMode = 0o600
+	sharedOutputMode  = 0o644
 )
 
 type ReportRow struct {
@@ -74,6 +76,7 @@ type reportViewData struct {
 type reportOptions struct {
 	MaxChartPoints int
 	FullChart      bool
+	OutputMode     os.FileMode
 }
 
 type ChartInfo struct {
@@ -93,7 +96,7 @@ type ChartPoint struct {
 
 func runReport(args []string) int {
 	usage := func() {
-		fmt.Fprintf(os.Stderr, "Usage: paping-go report <csv-file> -o <report.html> [--max-chart-points N] [--full-chart]\n")
+		fmt.Fprintf(os.Stderr, "Usage: paping-go report <csv-file> -o <report.html> [--max-chart-points N] [--full-chart] [--output-mode 0600|0644]\n")
 	}
 
 	csvPath, outputPath, options, help, err := parseReportArgs(args)
@@ -126,7 +129,7 @@ func runReport(args []string) int {
 		fmt.Fprintf(os.Stderr, "Error: failed to generate report: %v\n", err)
 		return 2
 	}
-	if err := writePrivateOutputFile(outputPath, []byte(html)); err != nil {
+	if err := writeOutputFile(outputPath, []byte(html), options.OutputMode); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to write report: %v\n", err)
 		return 2
 	}
@@ -136,7 +139,7 @@ func runReport(args []string) int {
 }
 
 func defaultReportOptions() reportOptions {
-	return reportOptions{MaxChartPoints: defaultChartLimit}
+	return reportOptions{MaxChartPoints: defaultChartLimit, OutputMode: defaultOutputMode}
 }
 
 func parseReportArgs(args []string) (csvPath, outputPath string, options reportOptions, help bool, err error) {
@@ -175,6 +178,22 @@ func parseReportArgs(args []string) (csvPath, outputPath string, options reportO
 				return "", "", options, false, parseErr
 			}
 			options.MaxChartPoints = limit
+		case arg == "--output-mode":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return "", "", options, false, fmt.Errorf("missing value for --output-mode")
+			}
+			i++
+			mode, parseErr := parseOutputMode(args[i])
+			if parseErr != nil {
+				return "", "", options, false, parseErr
+			}
+			options.OutputMode = mode
+		case strings.HasPrefix(arg, "--output-mode="):
+			mode, parseErr := parseOutputMode(strings.TrimPrefix(arg, "--output-mode="))
+			if parseErr != nil {
+				return "", "", options, false, parseErr
+			}
+			options.OutputMode = mode
 		case strings.HasPrefix(arg, "-"):
 			return "", "", options, false, fmt.Errorf("unknown report option %q", arg)
 		default:
@@ -195,12 +214,27 @@ func parseMaxChartPoints(value string) (int, error) {
 	return limit, nil
 }
 
+func parseOutputMode(value string) (os.FileMode, error) {
+	switch strings.TrimSpace(value) {
+	case "0600":
+		return defaultOutputMode, nil
+	case "0644":
+		return sharedOutputMode, nil
+	default:
+		return 0, fmt.Errorf("output mode must be either 0600 or 0644")
+	}
+}
+
 func createPrivateOutputFile(path string) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	return createOutputFile(path, defaultOutputMode)
+}
+
+func createOutputFile(path string, mode os.FileMode) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return nil, err
 	}
-	if err := f.Chmod(0o600); err != nil {
+	if err := f.Chmod(mode); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -208,7 +242,11 @@ func createPrivateOutputFile(path string) (*os.File, error) {
 }
 
 func writePrivateOutputFile(path string, data []byte) error {
-	f, err := createPrivateOutputFile(path)
+	return writeOutputFile(path, data, defaultOutputMode)
+}
+
+func writeOutputFile(path string, data []byte, mode os.FileMode) error {
+	f, err := createOutputFile(path, mode)
 	if err != nil {
 		return err
 	}

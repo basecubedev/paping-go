@@ -63,22 +63,22 @@ func TestParseReportArgsChartOptions(t *testing.T) {
 		{
 			name: "defaults",
 			args: []string{"input.csv", "-o", "out.html"},
-			want: reportOptions{MaxChartPoints: defaultChartLimit},
+			want: defaultReportOptions(),
 		},
 		{
 			name: "max chart points",
 			args: []string{"input.csv", "-o", "out.html", "--max-chart-points", "42"},
-			want: reportOptions{MaxChartPoints: 42},
+			want: reportOptions{MaxChartPoints: 42, OutputMode: defaultOutputMode},
 		},
 		{
 			name: "max chart points equals",
 			args: []string{"input.csv", "-o", "out.html", "--max-chart-points=43"},
-			want: reportOptions{MaxChartPoints: 43},
+			want: reportOptions{MaxChartPoints: 43, OutputMode: defaultOutputMode},
 		},
 		{
 			name: "full chart",
 			args: []string{"input.csv", "-o", "out.html", "--full-chart"},
-			want: reportOptions{MaxChartPoints: defaultChartLimit, FullChart: true},
+			want: reportOptions{MaxChartPoints: defaultChartLimit, FullChart: true, OutputMode: defaultOutputMode},
 		},
 		{
 			name:      "missing max chart points",
