@@ -87,7 +87,7 @@ Options:
 ```text
 Usage:
   paping-go [options] <host>
-  paping-go report <csv-file> -o <report.html>
+  paping-go report <csv-file> -o <report.html> [--max-chart-points N] [--full-chart] [--output-mode 0600|0644]
 
 Examples:
   paping-go -p 443 -c 5 example.com
@@ -104,6 +104,7 @@ Examples:
   -6          force IPv6
   -all-ips    test all resolved IP addresses matching -4/-6; -r controls full IP cycles per second
   -o FILE     write results to CSV file
+  -output-mode MODE  output file permissions: 0600 or 0644 (default: 0600)
   -nocolor    disable color output
   -version    print version and exit
 ```
@@ -145,6 +146,17 @@ Write CSV output:
 ```bash
 paping-go -p 443 -c 10 -o results.csv example.com
 ```
+
+By default, generated CSV and HTML report files are written with private permissions (`0600`) because they may contain internal hostnames, IP addresses, latencies, and connection errors.
+
+For intentionally shared outputs, choose `0644` explicitly:
+
+```bash
+paping-go -p 443 -c 10 -o results.csv --output-mode 0644 example.com
+paping-go report results.csv -o report.html --output-mode 0644
+```
+
+Use `0644` only when the file may be readable by other local users or a webserver.
 
 Generate an HTML report from CSV output:
 
