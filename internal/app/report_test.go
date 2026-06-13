@@ -24,6 +24,9 @@ func TestParseReportCSVValid(t *testing.T) {
 	if !rows[0].Success || rows[0].LatencyMS != 12.345 {
 		t.Fatalf("success row = %#v, want ok with latency", rows[0])
 	}
+	if rows[0].IP != "93.184.216.34" {
+		t.Fatalf("IP = %q, want 93.184.216.34", rows[0].IP)
+	}
 	if rows[1].Success || rows[1].Error != "timeout" {
 		t.Fatalf("failure row = %#v, want timeout failure", rows[1])
 	}
@@ -40,12 +43,16 @@ func TestParseReportCSVMissingHeader(t *testing.T) {
 }
 
 func TestParseReportCSVInvalidLatency(t *testing.T) {
-	_, err := parseReportCSV(strings.NewReader(strings.Join([]string{
-		"timestamp,host,ip,port,status,latency_ms",
-		"2026-06-11T10:00:00Z,example.com,93.184.216.34,443,ok,nope",
-	}, "\n")))
-	if err == nil || !strings.Contains(err.Error(), "invalid latency_ms") {
-		t.Fatalf("error = %v, want invalid latency", err)
+	for _, latency := range []string{"nope", "NaN", "+Inf", "-Inf"} {
+		t.Run(latency, func(t *testing.T) {
+			_, err := parseReportCSV(strings.NewReader(strings.Join([]string{
+				"timestamp,host,ip,port,status,latency_ms",
+				"2026-06-11T10:00:00Z,example.com,93.184.216.34,443,ok," + latency,
+			}, "\n")))
+			if err == nil || !strings.Contains(err.Error(), "invalid latency_ms") {
+				t.Fatalf("error = %v, want invalid latency", err)
+			}
+		})
 	}
 }
 
@@ -74,11 +81,11 @@ func TestParseReportCSVEmpty(t *testing.T) {
 func TestComputeReportStats(t *testing.T) {
 	t0 := time.Date(2026, 6, 11, 10, 0, 0, 0, time.UTC)
 	rows := []ReportRow{
-		{Timestamp: t0.Add(3 * time.Second), Target: "b.example", Port: 443, Success: true, LatencyMS: 10},
-		{Timestamp: t0.Add(1 * time.Second), Target: "a.example", Port: 80, Success: false, Error: "timeout"},
-		{Timestamp: t0.Add(2 * time.Second), Target: "a.example", Port: 443, Success: false, Error: "refused"},
-		{Timestamp: t0, Target: "b.example", Port: 443, Success: true, LatencyMS: 30},
-		{Timestamp: t0.Add(4 * time.Second), Target: "b.example", Port: 443, Success: true, LatencyMS: 20},
+		{Timestamp: t0.Add(3 * time.Second), Target: "b.example", IP: "192.0.2.2", Port: 443, Success: true, LatencyMS: 10},
+		{Timestamp: t0.Add(1 * time.Second), Target: "a.example", IP: "192.0.2.1", Port: 80, Success: false, Error: "timeout"},
+		{Timestamp: t0.Add(2 * time.Second), Target: "a.example", IP: "192.0.2.1", Port: 443, Success: false, Error: "refused"},
+		{Timestamp: t0, Target: "b.example", IP: "192.0.2.2", Port: 443, Success: true, LatencyMS: 30},
+		{Timestamp: t0.Add(4 * time.Second), Target: "b.example", IP: "192.0.2.3", Port: 443, Success: true, LatencyMS: 20},
 	}
 
 	stats := computeReportStats(rows)
@@ -100,6 +107,9 @@ func TestComputeReportStats(t *testing.T) {
 	}
 	if strings.Join(stats.Targets, ",") != "a.example,b.example" {
 		t.Fatalf("targets = %#v", stats.Targets)
+	}
+	if strings.Join(stats.IPs, ",") != "192.0.2.1,192.0.2.2,192.0.2.3" {
+		t.Fatalf("IPs = %#v", stats.IPs)
 	}
 	if len(stats.Ports) != 2 || stats.Ports[0] != 80 || stats.Ports[1] != 443 {
 		t.Fatalf("ports = %#v", stats.Ports)
@@ -135,6 +145,9 @@ func TestRenderReportHTMLEscapesCSVValues(t *testing.T) {
 	}
 	if !strings.Contains(html, "paping-go report") || !strings.Contains(html, "Total checks") {
 		t.Fatalf("report HTML missing expected summary:\n%s", html)
+	}
+	if !strings.Contains(html, `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">`) {
+		t.Fatalf("report HTML missing CSP meta tag:\n%s", html)
 	}
 	if strings.Contains(html, `<script>alert("x")</script>`) || strings.Contains(html, "<b>boom</b>") {
 		t.Fatalf("report contains unescaped CSV values:\n%s", html)
@@ -268,6 +281,24 @@ func TestBuildChartPointsIncludesAllRows(t *testing.T) {
 	}
 }
 
+func TestBuildChartPointsForOptionsDownsamplesEvenly(t *testing.T) {
+	rows := makeReportRows(10, 0)
+	points := buildChartPointsForOptions(rows, reportOptions{MaxChartPoints: 4})
+	if len(points) != 4 {
+		t.Fatalf("chart points = %d, want 4", len(points))
+	}
+	got := []int{points[0].Index, points[1].Index, points[2].Index, points[3].Index}
+	want := []int{1, 4, 7, 10}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("sampled indexes = %v, want %v", got, want)
+	}
+
+	full := buildChartPointsForOptions(rows, reportOptions{MaxChartPoints: 4, FullChart: true})
+	if len(full) != len(rows) {
+		t.Fatalf("full chart points = %d, want %d", len(full), len(rows))
+	}
+}
+
 func TestRenderReportHTMLLargeDatasetStaysCompact(t *testing.T) {
 	rows := makeReportRows(10001, 10)
 	html, err := renderReportHTML(rows, time.Date(2026, 6, 11, 11, 0, 0, 0, time.UTC))
@@ -299,9 +330,31 @@ func TestRenderReportHTMLLargeDatasetStaysCompact(t *testing.T) {
 	}
 }
 
-func TestChartFullDataNoteWarnsForVeryLargeReports(t *testing.T) {
-	note := chartFullDataNote(100001)
-	if !strings.Contains(note, "Chart contains all 100001 CSV rows.") || !strings.Contains(note, "Very large reports can be slow in the browser") {
+func TestRenderReportHTMLDownsamplesLargeChart(t *testing.T) {
+	rows := makeReportRows(25, 0)
+	html, err := renderReportHTMLWithOptions(rows, time.Date(2026, 6, 11, 11, 0, 0, 0, time.UTC), reportOptions{MaxChartPoints: 5})
+	if err != nil {
+		t.Fatalf("renderReportHTML failed: %v", err)
+	}
+	if !strings.Contains(html, "Chart data was downsampled from 25 to 5 points for browser performance.") {
+		t.Fatalf("report missing downsample note:\n%s", html)
+	}
+	var points []ChartPoint
+	if err := json.Unmarshal([]byte(extractChartJSON(t, html)), &points); err != nil {
+		t.Fatalf("chart JSON did not unmarshal: %v", err)
+	}
+	if len(points) != 5 || points[0].Index != 1 || points[len(points)-1].Index != 25 {
+		t.Fatalf("chart points = %#v", points)
+	}
+	stats := computeReportStats(rows)
+	if !strings.Contains(html, fmt.Sprintf("<div class=\"value\">%d</div>", stats.Total)) {
+		t.Fatalf("report should still show full stats total %d", stats.Total)
+	}
+}
+
+func TestChartDataNoteWarnsForVeryLargeFullReports(t *testing.T) {
+	note := chartDataNote(100001, 100001, reportOptions{MaxChartPoints: defaultChartLimit, FullChart: true})
+	if !strings.Contains(note, "Chart contains all 100001 CSV rows because --full-chart was used.") || !strings.Contains(note, "Very large reports can be slow in the browser") {
 		t.Fatalf("very large report note = %q", note)
 	}
 }
@@ -338,6 +391,7 @@ func makeReportRows(count int, failEvery int) []ReportRow {
 		row := ReportRow{
 			Timestamp: start.Add(time.Duration(i) * time.Second),
 			Target:    "127.0.0.1",
+			IP:        "127.0.0.1",
 			Port:      8080,
 			Success:   true,
 			LatencyMS: 0.25 + float64(i%100)/100,

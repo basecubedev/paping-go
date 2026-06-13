@@ -188,7 +188,7 @@ func TestFillCheckDepsPreservesExplicitValues(t *testing.T) {
 		after: func(d time.Duration) <-chan time.Time {
 			return make(chan time.Time)
 		},
-		createFile: func(name string) (io.WriteCloser, error) {
+		createFile: func(name string, mode os.FileMode, noClobber bool) (io.WriteCloser, error) {
 			return nil, nil
 		},
 		enableConsoleColors: func() {},

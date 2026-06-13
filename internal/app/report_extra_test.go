@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,7 +36,7 @@ func TestParseReportArgsMatrix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotCSV, gotOut, gotHelp, err := parseReportArgs(tt.args)
+			gotCSV, gotOut, _, gotHelp, err := parseReportArgs(tt.args)
 			if tt.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
 					t.Fatalf("error = %v, want containing %q", err, tt.wantError)
@@ -48,6 +49,116 @@ func TestParseReportArgsMatrix(t *testing.T) {
 			if gotCSV != tt.wantCSV || gotOut != tt.wantOut || gotHelp != tt.wantHelp {
 				t.Fatalf("got csv=%q out=%q help=%v, want csv=%q out=%q help=%v",
 					gotCSV, gotOut, gotHelp, tt.wantCSV, tt.wantOut, tt.wantHelp)
+			}
+		})
+	}
+}
+
+func TestParseReportArgsChartOptions(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		want      reportOptions
+		wantError string
+	}{
+		{
+			name: "defaults",
+			args: []string{"input.csv", "-o", "out.html"},
+			want: defaultReportOptions(),
+		},
+		{
+			name: "max chart points",
+			args: []string{"input.csv", "-o", "out.html", "--max-chart-points", "42"},
+			want: reportOptions{MaxChartPoints: 42, OutputMode: defaultOutputMode},
+		},
+		{
+			name: "max chart points equals",
+			args: []string{"input.csv", "-o", "out.html", "--max-chart-points=43"},
+			want: reportOptions{MaxChartPoints: 43, OutputMode: defaultOutputMode},
+		},
+		{
+			name: "full chart",
+			args: []string{"input.csv", "-o", "out.html", "--full-chart"},
+			want: reportOptions{MaxChartPoints: defaultChartLimit, FullChart: true, OutputMode: defaultOutputMode},
+		},
+		{
+			name: "no clobber",
+			args: []string{"input.csv", "-o", "out.html", "--no-clobber"},
+			want: reportOptions{MaxChartPoints: defaultChartLimit, OutputMode: defaultOutputMode, NoClobber: true},
+		},
+		{
+			name: "output mode",
+			args: []string{"input.csv", "-o", "out.html", "--output-mode", "0644"},
+			want: reportOptions{MaxChartPoints: defaultChartLimit, OutputMode: sharedOutputMode},
+		},
+		{
+			name: "output mode equals",
+			args: []string{"input.csv", "-o", "out.html", "--output-mode=0644"},
+			want: reportOptions{MaxChartPoints: defaultChartLimit, OutputMode: sharedOutputMode},
+		},
+		{
+			name:      "missing max chart points",
+			args:      []string{"input.csv", "-o", "out.html", "--max-chart-points"},
+			wantError: "missing value",
+		},
+		{
+			name:      "bad max chart points",
+			args:      []string{"input.csv", "-o", "out.html", "--max-chart-points", "0"},
+			wantError: "positive integer",
+		},
+		{
+			name:      "missing output mode",
+			args:      []string{"input.csv", "-o", "out.html", "--output-mode"},
+			wantError: "missing value",
+		},
+		{
+			name:      "bad output mode",
+			args:      []string{"input.csv", "-o", "out.html", "--output-mode", "0666"},
+			wantError: "output mode must be either 0600 or 0644",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, got, _, err := parseReportArgs(tt.args)
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Fatalf("error = %v, want containing %q", err, tt.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("options = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseOutputMode(t *testing.T) {
+	valid := map[string]os.FileMode{
+		"0600": defaultOutputMode,
+		"0644": sharedOutputMode,
+	}
+	for input, want := range valid {
+		t.Run(input, func(t *testing.T) {
+			got, err := parseOutputMode(input)
+			if err != nil {
+				t.Fatalf("parseOutputMode failed: %v", err)
+			}
+			if got != want {
+				t.Fatalf("mode = %v, want %v", got, want)
+			}
+		})
+	}
+
+	for _, input := range []string{"0666", "0777", "600", "644", "abc"} {
+		t.Run(input, func(t *testing.T) {
+			_, err := parseOutputMode(input)
+			if err == nil || !strings.Contains(err.Error(), "output mode must be either 0600 or 0644") {
+				t.Fatalf("error = %v, want output mode validation error", err)
 			}
 		})
 	}
@@ -80,6 +191,234 @@ func TestRunReportErrorPaths(t *testing.T) {
 				t.Fatalf("runReport exit = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRunReportOutputFileModes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose Unix file modes reliably")
+	}
+	tests := []struct {
+		name     string
+		existing os.FileMode
+		args     []string
+		wantMode os.FileMode
+	}{
+		{
+			name:     "shared mode creates shared report",
+			args:     []string{"--output-mode", "0644"},
+			wantMode: sharedOutputMode,
+		},
+		{
+			name:     "shared mode hardens existing private report to requested mode",
+			existing: defaultOutputMode,
+			args:     []string{"--output-mode", "0644"},
+			wantMode: sharedOutputMode,
+		},
+		{
+			name:     "default hardens existing shared report",
+			existing: sharedOutputMode,
+			wantMode: defaultOutputMode,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			csvPath := validReportCSV(t, dir)
+			htmlPath := filepath.Join(dir, "report.html")
+			if tt.existing != 0 {
+				if err := os.WriteFile(htmlPath, []byte("old"), tt.existing); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(htmlPath, tt.existing); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			args := []string{csvPath, "-o", htmlPath}
+			args = append(args, tt.args...)
+			if got := runReport(args); got != 0 {
+				t.Fatalf("runReport exit = %d, want 0", got)
+			}
+
+			info, err := os.Stat(htmlPath)
+			if err != nil {
+				t.Fatalf("stat failed: %v", err)
+			}
+			if got := info.Mode().Perm(); got != tt.wantMode {
+				t.Fatalf("mode = %v, want %v", got, tt.wantMode)
+			}
+			content, err := os.ReadFile(htmlPath)
+			if err != nil {
+				t.Fatalf("read failed: %v", err)
+			}
+			if !strings.Contains(string(content), "paping-go report") {
+				t.Fatalf("report missing expected content:\n%s", content)
+			}
+			tmpFiles, err := filepath.Glob(filepath.Join(dir, ".report.html-*.tmp"))
+			if err != nil {
+				t.Fatalf("glob failed: %v", err)
+			}
+			if len(tmpFiles) != 0 {
+				t.Fatalf("temporary files left behind: %#v", tmpFiles)
+			}
+		})
+	}
+}
+
+func TestRunReportNoClobberRejectsExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := validReportCSV(t, dir)
+	htmlPath := filepath.Join(dir, "report.html")
+	if err := os.WriteFile(htmlPath, []byte("old report"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := runReport([]string{csvPath, "-o", htmlPath, "--no-clobber"}); got != 2 {
+		t.Fatalf("runReport exit = %d, want 2", got)
+	}
+	content, err := os.ReadFile(htmlPath)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if string(content) != "old report" {
+		t.Fatalf("content = %q, want old report", content)
+	}
+	tmpFiles, err := filepath.Glob(filepath.Join(dir, ".report.html-*.tmp"))
+	if err != nil {
+		t.Fatalf("glob failed: %v", err)
+	}
+	if len(tmpFiles) != 0 {
+		t.Fatalf("temporary files left behind: %#v", tmpFiles)
+	}
+}
+
+func TestWriteOutputFileAtomicallyNoClobberRejectsLateExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.html")
+
+	err := writeOutputFileAtomicallyWithWriter(path, []byte("new report"), defaultOutputMode, true, func(f *os.File, data []byte) error {
+		if writeErr := writeAll(f, data); writeErr != nil {
+			return writeErr
+		}
+		return os.WriteFile(path, []byte("late report"), 0o600)
+	})
+	if err == nil || !strings.Contains(err.Error(), "output file already exists: "+path) {
+		t.Fatalf("error = %v, want no-clobber error", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if string(content) != "late report" {
+		t.Fatalf("content = %q, want late report", content)
+	}
+	tmpFiles, err := filepath.Glob(filepath.Join(dir, ".report.html-*.tmp"))
+	if err != nil {
+		t.Fatalf("glob failed: %v", err)
+	}
+	if len(tmpFiles) != 0 {
+		t.Fatalf("temporary files left behind: %#v", tmpFiles)
+	}
+}
+
+func TestWriteOutputFileAtomicallyKeepsExistingFileOnWriteError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.html")
+	if err := os.WriteFile(path, []byte("old report"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := writeOutputFileAtomicallyWithWriter(path, []byte("new report"), defaultOutputMode, false, func(f *os.File, data []byte) error {
+		if _, writeErr := f.Write([]byte("partial")); writeErr != nil {
+			t.Fatalf("setup write failed: %v", writeErr)
+		}
+		return errors.New("forced write failure")
+	})
+	if err == nil || !strings.Contains(err.Error(), "forced write failure") {
+		t.Fatalf("error = %v, want forced write failure", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if string(content) != "old report" {
+		t.Fatalf("content = %q, want old report", content)
+	}
+	tmpFiles, err := filepath.Glob(filepath.Join(dir, ".report.html-*.tmp"))
+	if err != nil {
+		t.Fatalf("glob failed: %v", err)
+	}
+	if len(tmpFiles) != 0 {
+		t.Fatalf("temporary files left behind: %#v", tmpFiles)
+	}
+}
+
+func TestCreatePrivateOutputFileUsesPrivateMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose Unix file modes reliably")
+	}
+	path := filepath.Join(t.TempDir(), "diagnostic-output.txt")
+	f, err := createPrivateOutputFile(path)
+	if err != nil {
+		t.Fatalf("createPrivateOutputFile failed: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close failed: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat failed: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("file mode = %v, want 0600", got)
+	}
+}
+
+func TestCreatePrivateOutputFileHardensExistingMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose Unix file modes reliably")
+	}
+	path := filepath.Join(t.TempDir(), "diagnostic-output.txt")
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := createPrivateOutputFile(path)
+	if err != nil {
+		t.Fatalf("createPrivateOutputFile failed: %v", err)
+	}
+	if _, err := f.Write([]byte("new")); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close failed: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat failed: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("file mode = %v, want 0600", got)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if string(content) != "new" {
+		t.Fatalf("content = %q, want new", content)
+	}
+}
+
+func TestCreatePrivateOutputFileReturnsOpenError(t *testing.T) {
+	_, err := createPrivateOutputFile(filepath.Join(t.TempDir(), "missing", "diagnostic-output.txt"))
+	if err == nil {
+		t.Fatal("expected open error")
 	}
 }
 
@@ -329,7 +668,7 @@ func FuzzParseReportArgs(f *testing.F) {
 		if len(args) > 8 {
 			args = args[:8]
 		}
-		_, _, _, _ = parseReportArgs(args)
+		_, _, _, _, _ = parseReportArgs(args)
 	})
 }
 

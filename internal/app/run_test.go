@@ -31,6 +31,9 @@ func TestParseRate(t *testing.T) {
 		{name: "zero", value: "0", wantErr: true},
 		{name: "too large", value: "1000.1", wantErr: true},
 		{name: "not numeric", value: "fast", wantErr: true},
+		{name: "nan", value: "NaN", wantErr: true},
+		{name: "positive infinity", value: "+Inf", wantErr: true},
+		{name: "negative infinity", value: "-Inf", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -215,7 +218,9 @@ func TestCLIHelpSmoke(t *testing.T) {
 	if !strings.Contains(output, "paping-go [options] <host>") ||
 		!strings.Contains(output, "paping-go report <csv-file> -o <report.html>") ||
 		!strings.Contains(output, "-c N        number of checks (-1 = infinite, default: -1)") ||
-		!strings.Contains(output, "-d DURATION run for duration; cannot be combined with -c") {
+		!strings.Contains(output, "-d DURATION run for duration; cannot be combined with -c") ||
+		!strings.Contains(output, "-all-ips    test all resolved IP addresses matching -4/-6; -r controls full IP cycles per second") ||
+		!strings.Contains(output, "-no-clobber fail if the output file already exists") {
 		t.Fatalf("help output missing usage:\n%s", output)
 	}
 }

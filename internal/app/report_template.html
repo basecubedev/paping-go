@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
 <title>paping-go report</title>
 <style>
   :root {
@@ -237,6 +238,7 @@
     <h2>Run Details</h2>
     <dl class="details">
       <div><dt>Targets</dt><dd>{{joinStrings .Stats.Targets}}</dd></div>
+      <div><dt>Tested IPs</dt><dd>{{joinStrings .Stats.IPs}}</dd></div>
       <div><dt>Ports</dt><dd>{{joinInts .Stats.Ports}}</dd></div>
       <div><dt>First timestamp</dt><dd>{{formatTimestamp .Stats.FirstTimestamp}}</dd></div>
       <div><dt>Last timestamp</dt><dd>{{formatTimestamp .Stats.LastTimestamp}}</dd></div>
@@ -295,11 +297,11 @@
     <p class="note">{{.Stats.Failed}} failures recorded. Showing the most recent {{len .Failures}}.</p>
     <table>
       <thead>
-        <tr><th>Timestamp</th><th>Target</th><th>Port</th><th>Error</th></tr>
+        <tr><th>Timestamp</th><th>Target</th><th>IP</th><th>Port</th><th>Error</th></tr>
       </thead>
       <tbody>
       {{range .Failures}}
-        <tr><td>{{formatTimestamp .Timestamp}}</td><td>{{.Target}}</td><td>{{.Port}}</td><td>{{.Error}}</td></tr>
+        <tr><td>{{formatTimestamp .Timestamp}}</td><td>{{.Target}}</td><td>{{.IP}}</td><td>{{.Port}}</td><td>{{.Error}}</td></tr>
       {{end}}
       </tbody>
     </table>
@@ -317,13 +319,14 @@
     {{end}}
     <table>
       <thead>
-        <tr><th>Timestamp</th><th>Target</th><th>Port</th><th>Status</th><th>Latency</th></tr>
+        <tr><th>Timestamp</th><th>Target</th><th>IP</th><th>Port</th><th>Status</th><th>Latency</th></tr>
       </thead>
       <tbody>
       {{range .RecentRows}}
         <tr>
           <td>{{formatTimestamp .Timestamp}}</td>
           <td>{{.Target}}</td>
+          <td>{{.IP}}</td>
           <td>{{.Port}}</td>
           <td>{{if .Success}}<span class="status-ok">ok</span>{{else}}<span class="status-fail">{{statusText .}}</span>{{end}}</td>
           <td>{{if .Success}}{{formatFloat .LatencyMS}} ms{{else}}<span class="muted">n/a</span>{{end}}</td>

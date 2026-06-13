@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,6 +21,7 @@ type checkRun struct {
 	dials  []dialCall
 	waits  []time.Duration
 	files  map[string]*memoryWriteCloser
+	modes  map[string]os.FileMode
 }
 
 type dialCall struct {
@@ -29,7 +31,10 @@ type dialCall struct {
 }
 
 func newCheckRun() *checkRun {
-	return &checkRun{files: map[string]*memoryWriteCloser{}}
+	return &checkRun{
+		files: map[string]*memoryWriteCloser{},
+		modes: map[string]os.FileMode{},
+	}
 }
 
 func (r *checkRun) deps(addrs []net.IPAddr, dialResults ...dialResult) checkDeps {
@@ -58,9 +63,10 @@ func (r *checkRun) deps(addrs []net.IPAddr, dialResults ...dialResult) checkDeps
 			ch <- now
 			return ch
 		},
-		createFile: func(name string) (io.WriteCloser, error) {
+		createFile: func(name string, mode os.FileMode, noClobber bool) (io.WriteCloser, error) {
 			f := &memoryWriteCloser{}
 			r.files[name] = f
+			r.modes[name] = mode
 			return f, nil
 		},
 		enableConsoleColors: func() {},
@@ -245,6 +251,58 @@ func TestRunCheckWithDepsIPSelection(t *testing.T) {
 	}
 }
 
+func TestResolvedTargetsSelectsAllMatchingIPs(t *testing.T) {
+	addrs := []net.IPAddr{
+		{IP: net.ParseIP("192.0.2.10")},
+		{IP: net.ParseIP("2001:db8::10")},
+		{IP: net.ParseIP("192.0.2.11")},
+	}
+	targets := resolvedTargets(addrs, "4", 443, true)
+	if len(targets) != 2 {
+		t.Fatalf("targets = %#v, want two IPv4 targets", targets)
+	}
+	if targets[0].DialNet != "tcp4" || targets[0].Address != "192.0.2.10:443" ||
+		targets[1].DialNet != "tcp4" || targets[1].Address != "192.0.2.11:443" {
+		t.Fatalf("targets = %#v", targets)
+	}
+
+	first := resolvedTargets(addrs, "", 443, false)
+	if len(first) != 1 || first[0].IPStr != "192.0.2.10" {
+		t.Fatalf("first target = %#v", first)
+	}
+}
+
+func TestRunCheckWithDepsAllIPsDialsEveryResolvedAddress(t *testing.T) {
+	r := newCheckRun()
+	deps := r.deps([]net.IPAddr{
+		{IP: net.ParseIP("192.0.2.10")},
+		{IP: net.ParseIP("192.0.2.11")},
+	}, dialResult{ms: 1.25}, dialResult{ms: 2.5})
+
+	code := runCheckWithDeps([]string{"-nocolor", "-all-ips", "-p", "443", "-c", "1", "-o", "results.csv", "example.com"}, "dev", deps)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, r.stdout.String(), r.stderr.String())
+	}
+	if len(r.dials) != 2 {
+		t.Fatalf("dial calls = %#v, want two", r.dials)
+	}
+	if r.dials[0].address != "192.0.2.10:443" || r.dials[1].address != "192.0.2.11:443" {
+		t.Fatalf("dial calls = %#v", r.dials)
+	}
+	if !strings.Contains(r.stdout.String(), "Connecting to example.com [192.0.2.10, 192.0.2.11]") {
+		t.Fatalf("stdout missing all IP display:\n%s", r.stdout.String())
+	}
+	gotCSV := r.files["results.csv"].String()
+	for _, want := range []string{
+		",example.com,192.0.2.10,443,ok,1.250\n",
+		",example.com,192.0.2.11,443,ok,2.500\n",
+	} {
+		if !strings.Contains(gotCSV, want) {
+			t.Fatalf("CSV missing %q:\n%s", want, gotCSV)
+		}
+	}
+}
+
 func TestRunCheckWithDepsCountModeCallsDialerExactlyN(t *testing.T) {
 	r := newCheckRun()
 	deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}},
@@ -343,12 +401,156 @@ func TestRunCheckWithDepsCSVOutputSuccessAndFailure(t *testing.T) {
 	if !r.files["results.csv"].closed {
 		t.Fatal("CSV file was not closed")
 	}
+	if r.modes["results.csv"] != defaultOutputMode {
+		t.Fatalf("CSV mode = %v, want %v", r.modes["results.csv"], defaultOutputMode)
+	}
+}
+
+func TestRunCheckWithDepsCSVOutputModeOption(t *testing.T) {
+	r := newCheckRun()
+	deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, dialResult{ms: 1})
+
+	code := runCheckWithDeps([]string{"-nocolor", "-p", "443", "-c", "1", "-o", "results.csv", "--output-mode", "0644", "example.com"}, "dev", deps)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, r.stdout.String(), r.stderr.String())
+	}
+	if r.modes["results.csv"] != sharedOutputMode {
+		t.Fatalf("CSV mode = %v, want %v", r.modes["results.csv"], sharedOutputMode)
+	}
+}
+
+func TestRunCheckWithDepsRejectsInvalidOutputMode(t *testing.T) {
+	r := newCheckRun()
+	deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}})
+
+	code := runCheckWithDeps([]string{"-nocolor", "-p", "443", "-c", "1", "-o", "results.csv", "--output-mode", "0666", "example.com"}, "dev", deps)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if !strings.Contains(r.stderr.String(), "output mode must be either 0600 or 0644") {
+		t.Fatalf("stderr missing output mode error:\n%s", r.stderr.String())
+	}
+	if len(r.dials) != 0 {
+		t.Fatalf("dial calls = %#v, want none", r.dials)
+	}
+}
+
+func TestRunCheckCSVOutputFileModes(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("Windows does not expose Unix file modes reliably")
+	}
+	tests := []struct {
+		name      string
+		existing  os.FileMode
+		args      []string
+		wantMode  os.FileMode
+		wantValue string
+	}{
+		{
+			name:      "default creates private file",
+			args:      []string{"-nocolor", "-p", "443", "-c", "1", "-o"},
+			wantMode:  defaultOutputMode,
+			wantValue: "1.250",
+		},
+		{
+			name:      "default hardens existing shared file",
+			existing:  0o644,
+			args:      []string{"-nocolor", "-p", "443", "-c", "1", "-o"},
+			wantMode:  defaultOutputMode,
+			wantValue: "1.250",
+		},
+		{
+			name:      "shared mode creates shared file",
+			args:      []string{"-nocolor", "-p", "443", "-c", "1", "-o"},
+			wantMode:  sharedOutputMode,
+			wantValue: "1.250",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "results.csv")
+			if tt.existing != 0 {
+				if err := os.WriteFile(path, []byte("old"), tt.existing); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(path, tt.existing); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			args := append([]string{}, tt.args...)
+			args = append(args, path)
+			if tt.wantMode == sharedOutputMode {
+				args = append(args, "--output-mode", "0644")
+			}
+			args = append(args, "example.com")
+
+			r := newCheckRun()
+			deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, dialResult{ms: 1.25})
+			deps.createFile = func(name string, mode os.FileMode, noClobber bool) (io.WriteCloser, error) {
+				return createOutputFile(name, mode, noClobber)
+			}
+			code := runCheckWithDeps(args, "dev", deps)
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, r.stdout.String(), r.stderr.String())
+			}
+
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("stat failed: %v", err)
+			}
+			if got := info.Mode().Perm(); got != tt.wantMode {
+				t.Fatalf("mode = %v, want %v", got, tt.wantMode)
+			}
+			content, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read failed: %v", err)
+			}
+			if !strings.Contains(string(content), tt.wantValue) {
+				t.Fatalf("CSV missing value %q:\n%s", tt.wantValue, content)
+			}
+		})
+	}
+}
+
+func TestRunCheckCSVNoClobberRejectsExistingFile(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("Windows does not expose Unix file modes reliably")
+	}
+	path := filepath.Join(t.TempDir(), "results.csv")
+	if err := os.WriteFile(path, []byte("old csv"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := newCheckRun()
+	deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, dialResult{ms: 1.25})
+	deps.createFile = func(name string, mode os.FileMode, noClobber bool) (io.WriteCloser, error) {
+		return createOutputFile(name, mode, noClobber)
+	}
+	code := runCheckWithDeps([]string{"-nocolor", "-p", "443", "-c", "1", "-o", path, "--no-clobber", "example.com"}, "dev", deps)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, r.stdout.String(), r.stderr.String())
+	}
+	if !strings.Contains(r.stderr.String(), "output file already exists: "+path) {
+		t.Fatalf("stderr missing no-clobber error:\n%s", r.stderr.String())
+	}
+	if len(r.dials) != 0 {
+		t.Fatalf("dial calls = %#v, want none", r.dials)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if string(content) != "old csv" {
+		t.Fatalf("content = %q, want old csv", content)
+	}
 }
 
 func TestRunCheckWithDepsCSVCreateFileError(t *testing.T) {
 	r := newCheckRun()
 	deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}})
-	deps.createFile = func(name string) (io.WriteCloser, error) {
+	deps.createFile = func(name string, mode os.FileMode, noClobber bool) (io.WriteCloser, error) {
 		return nil, errors.New("permission denied")
 	}
 
@@ -367,7 +569,7 @@ func TestRunCheckWithDepsCSVCreateFileError(t *testing.T) {
 func TestRunCheckWithDepsCSVHeaderWriteError(t *testing.T) {
 	r := newCheckRun()
 	deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}})
-	deps.createFile = func(name string) (io.WriteCloser, error) {
+	deps.createFile = func(name string, mode os.FileMode, noClobber bool) (io.WriteCloser, error) {
 		return &failingWriteCloser{failAfter: 0}, nil
 	}
 
@@ -386,7 +588,7 @@ func TestRunCheckWithDepsCSVHeaderWriteError(t *testing.T) {
 func TestRunCheckWithDepsCSVWriteError(t *testing.T) {
 	r := newCheckRun()
 	deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, dialResult{ms: 1})
-	deps.createFile = func(name string) (io.WriteCloser, error) {
+	deps.createFile = func(name string, mode os.FileMode, noClobber bool) (io.WriteCloser, error) {
 		return &failingWriteCloser{failAfter: 1}, nil
 	}
 
@@ -403,7 +605,7 @@ func TestRunCheckWithDepsCSVCloseError(t *testing.T) {
 	r := newCheckRun()
 	csvFile := &memoryWriteCloser{closeErr: errors.New("close failed")}
 	deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, dialResult{ms: 1})
-	deps.createFile = func(name string) (io.WriteCloser, error) {
+	deps.createFile = func(name string, mode os.FileMode, noClobber bool) (io.WriteCloser, error) {
 		r.files[name] = csvFile
 		return csvFile, nil
 	}
