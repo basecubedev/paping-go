@@ -74,6 +74,14 @@ type reportViewData struct {
 	FailureLimit   int
 }
 
+type reportData struct {
+	Stats        ReportStats
+	ChartPoints  []ChartPoint
+	Failures     []ReportRow
+	RecentRows   []ReportRow
+	OriginalRows int
+}
+
 type reportOptions struct {
 	MaxChartPoints int
 	FullChart      bool
@@ -99,6 +107,11 @@ type ChartPoint struct {
 func runReport(args []string) int {
 	usage := func() {
 		fmt.Fprintf(os.Stderr, "Usage: paping-go report <csv-file> -o <report.html> [--max-chart-points N] [--full-chart] [--output-mode 0600|0644] [--no-clobber]\n")
+		fmt.Fprintf(os.Stderr, "\nOptions:\n")
+		fmt.Fprintf(os.Stderr, "  --max-chart-points N  maximum embedded chart points; statistics still use the full CSV (default: %d)\n", defaultChartLimit)
+		fmt.Fprintf(os.Stderr, "  --full-chart          embed every chart point; can create very large HTML reports for long measurements\n")
+		fmt.Fprintf(os.Stderr, "  --output-mode MODE    output file permissions: 0600 or 0644 (default: 0600)\n")
+		fmt.Fprintf(os.Stderr, "  --no-clobber          fail if the output file already exists\n")
 	}
 
 	csvPath, outputPath, options, help, err := parseReportArgs(args)
@@ -121,12 +134,12 @@ func runReport(args []string) int {
 		return 2
 	}
 
-	rows, err := readReportCSVFile(csvPath)
+	report, err := buildReportDataFromCSVFile(csvPath, options)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to read CSV: %v\n", err)
 		return 2
 	}
-	html, err := renderReportHTMLWithOptions(rows, time.Now(), options)
+	html, err := renderReportDataHTML(report, time.Now(), options)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to generate report: %v\n", err)
 		return 2
@@ -347,17 +360,85 @@ func readReportCSVFile(path string) ([]ReportRow, error) {
 	return parseReportCSV(f)
 }
 
+func buildReportDataFromCSVFile(path string, options reportOptions) (reportData, error) {
+	report, err := scanReportSummaryFile(path)
+	if err != nil {
+		return reportData{}, err
+	}
+	report.ChartPoints, err = selectReportChartPointsFromCSVFile(path, report.OriginalRows, options)
+	if err != nil {
+		return reportData{}, err
+	}
+	return report, nil
+}
+
+func scanReportSummaryFile(path string) (reportData, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return reportData{}, err
+	}
+	defer f.Close()
+
+	builder := newReportSummaryBuilder()
+	if err := scanReportCSV(f, func(idx int, row ReportRow) error {
+		builder.add(row)
+		return nil
+	}); err != nil {
+		return reportData{}, err
+	}
+	return builder.finish(), nil
+}
+
+func selectReportChartPointsFromCSVFile(path string, totalRows int, options reportOptions) ([]ChartPoint, error) {
+	indexes := reportChartSampleIndexes(totalRows, options)
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	points := make([]ChartPoint, 0, len(indexes))
+	nextSample := 0
+	err = scanReportCSV(f, func(idx int, row ReportRow) error {
+		if nextSample >= len(indexes) || idx != indexes[nextSample] {
+			return nil
+		}
+		points = append(points, chartPointForRow(row, idx))
+		nextSample++
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(points) != len(indexes) {
+		return nil, fmt.Errorf("selected %d chart points, expected %d", len(points), len(indexes))
+	}
+	return points, nil
+}
+
 func parseReportCSV(r io.Reader) ([]ReportRow, error) {
+	var rows []ReportRow
+	err := scanReportCSV(r, func(idx int, row ReportRow) error {
+		rows = append(rows, row)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func scanReportCSV(r io.Reader, visit func(idx int, row ReportRow) error) error {
 	reader := csv.NewReader(r)
 	reader.FieldsPerRecord = -1
 	reader.TrimLeadingSpace = true
 
 	header, err := reader.Read()
 	if err == io.EOF {
-		return nil, fmt.Errorf("empty CSV")
+		return fmt.Errorf("empty CSV")
 	}
 	if err != nil {
-		return nil, err
+		return err
 	}
 	columns := map[string]int{}
 	for i, h := range header {
@@ -367,12 +448,12 @@ func parseReportCSV(r io.Reader) ([]ReportRow, error) {
 	required := []string{"timestamp", "host", "port", "status", "latency_ms"}
 	for _, name := range required {
 		if _, ok := columns[name]; !ok {
-			return nil, fmt.Errorf("missing required column %q", name)
+			return fmt.Errorf("missing required column %q", name)
 		}
 	}
 
-	var rows []ReportRow
 	line := 1
+	rowIndex := 0
 	for {
 		record, err := reader.Read()
 		line++
@@ -380,7 +461,7 @@ func parseReportCSV(r io.Reader) ([]ReportRow, error) {
 			break
 		}
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if isBlankCSVRecord(record) {
 			continue
@@ -388,14 +469,17 @@ func parseReportCSV(r io.Reader) ([]ReportRow, error) {
 
 		row, err := parseReportCSVRecord(columns, record)
 		if err != nil {
-			return nil, fmt.Errorf("line %d: %w", line, err)
+			return fmt.Errorf("line %d: %w", line, err)
 		}
-		rows = append(rows, row)
+		if err := visit(rowIndex, row); err != nil {
+			return err
+		}
+		rowIndex++
 	}
-	if len(rows) == 0 {
-		return nil, fmt.Errorf("empty CSV/no usable rows")
+	if rowIndex == 0 {
+		return fmt.Errorf("empty CSV/no usable rows")
 	}
-	return rows, nil
+	return nil
 }
 
 func normalizeCSVHeader(header string) string {
@@ -470,61 +554,113 @@ func csvFieldOptional(columns map[string]int, record []string, name string) stri
 	return csvField(columns, record, name)
 }
 
+type reportSummaryBuilder struct {
+	stats          ReportStats
+	targetSet      map[string]struct{}
+	ipSet          map[string]struct{}
+	portSet        map[int]struct{}
+	latencies      []float64
+	recentRows     []ReportRow
+	recentFailures []ReportRow
+	currentSuccess int
+	currentFailure int
+}
+
+func newReportSummaryBuilder() *reportSummaryBuilder {
+	return &reportSummaryBuilder{
+		targetSet: map[string]struct{}{},
+		ipSet:     map[string]struct{}{},
+		portSet:   map[int]struct{}{},
+	}
+}
+
+func (b *reportSummaryBuilder) add(row ReportRow) {
+	if b.stats.Total == 0 || row.Timestamp.Before(b.stats.FirstTimestamp) {
+		b.stats.FirstTimestamp = row.Timestamp
+	}
+	if b.stats.Total == 0 || row.Timestamp.After(b.stats.LastTimestamp) {
+		b.stats.LastTimestamp = row.Timestamp
+	}
+
+	b.stats.Total++
+	b.targetSet[row.Target] = struct{}{}
+	if strings.TrimSpace(row.IP) != "" {
+		b.ipSet[row.IP] = struct{}{}
+	}
+	b.portSet[row.Port] = struct{}{}
+
+	if row.Success {
+		b.stats.Successful++
+		b.latencies = append(b.latencies, row.LatencyMS)
+		b.currentSuccess++
+		b.currentFailure = 0
+		if b.currentSuccess > b.stats.LongestSuccessStreak {
+			b.stats.LongestSuccessStreak = b.currentSuccess
+		}
+	} else {
+		b.stats.Failed++
+		b.currentFailure++
+		b.currentSuccess = 0
+		if b.currentFailure > b.stats.LongestFailureStreak {
+			b.stats.LongestFailureStreak = b.currentFailure
+		}
+		b.recentFailures = appendLimitedReportRow(b.recentFailures, row, maxReportFailures)
+	}
+
+	b.recentRows = appendLimitedReportRow(b.recentRows, row, maxRecentRows)
+}
+
+func (b *reportSummaryBuilder) finish() reportData {
+	stats := b.stats
+	if stats.Total > 0 {
+		stats.LossPercent = float64(stats.Failed) / float64(stats.Total) * 100
+		stats.Duration = stats.LastTimestamp.Sub(stats.FirstTimestamp)
+	}
+	stats.Targets = sortedStringKeys(b.targetSet)
+	stats.IPs = sortedStringKeys(b.ipSet)
+	stats.Ports = sortedIntKeys(b.portSet)
+
+	if len(b.latencies) > 0 {
+		sort.Float64s(b.latencies)
+		stats.LatencyCount = len(b.latencies)
+		stats.HasLatency = true
+		stats.MinLatencyMS = b.latencies[0]
+		stats.MaxLatencyMS = b.latencies[len(b.latencies)-1]
+		stats.MedianLatencyMS = median(b.latencies)
+		stats.P95LatencyMS = percentileNearestRank(b.latencies, 95)
+		stats.P99LatencyMS = percentileNearestRank(b.latencies, 99)
+		for _, latency := range b.latencies {
+			stats.AvgLatencyMS += latency
+		}
+		stats.AvgLatencyMS /= float64(len(b.latencies))
+	}
+
+	return reportData{
+		Stats:        stats,
+		Failures:     append([]ReportRow(nil), b.recentFailures...),
+		RecentRows:   append([]ReportRow(nil), b.recentRows...),
+		OriginalRows: stats.Total,
+	}
+}
+
+func appendLimitedReportRow(rows []ReportRow, row ReportRow, limit int) []ReportRow {
+	if limit <= 0 {
+		return rows[:0]
+	}
+	rows = append(rows, row)
+	if len(rows) > limit {
+		copy(rows, rows[len(rows)-limit:])
+		rows = rows[:limit]
+	}
+	return rows
+}
+
 func computeReportStats(rows []ReportRow) ReportStats {
-	stats := ReportStats{Total: len(rows)}
-	if len(rows) == 0 {
-		return stats
+	builder := newReportSummaryBuilder()
+	for _, row := range rows {
+		builder.add(row)
 	}
-
-	targetSet := map[string]struct{}{}
-	ipSet := map[string]struct{}{}
-	portSet := map[int]struct{}{}
-	var latencies []float64
-
-	for i, row := range rows {
-		if i == 0 || row.Timestamp.Before(stats.FirstTimestamp) {
-			stats.FirstTimestamp = row.Timestamp
-		}
-		if i == 0 || row.Timestamp.After(stats.LastTimestamp) {
-			stats.LastTimestamp = row.Timestamp
-		}
-		targetSet[row.Target] = struct{}{}
-		if strings.TrimSpace(row.IP) != "" {
-			ipSet[row.IP] = struct{}{}
-		}
-		portSet[row.Port] = struct{}{}
-
-		if row.Success {
-			stats.Successful++
-			latencies = append(latencies, row.LatencyMS)
-		} else {
-			stats.Failed++
-		}
-	}
-
-	stats.LossPercent = float64(stats.Failed) / float64(stats.Total) * 100
-	stats.Duration = stats.LastTimestamp.Sub(stats.FirstTimestamp)
-	stats.Targets = sortedStringKeys(targetSet)
-	stats.IPs = sortedStringKeys(ipSet)
-	stats.Ports = sortedIntKeys(portSet)
-	stats.LongestSuccessStreak, stats.LongestFailureStreak = longestReportStreaks(rows)
-
-	if len(latencies) == 0 {
-		return stats
-	}
-	sort.Float64s(latencies)
-	stats.LatencyCount = len(latencies)
-	stats.HasLatency = true
-	stats.MinLatencyMS = latencies[0]
-	stats.MaxLatencyMS = latencies[len(latencies)-1]
-	stats.MedianLatencyMS = median(latencies)
-	stats.P95LatencyMS = percentileNearestRank(latencies, 95)
-	stats.P99LatencyMS = percentileNearestRank(latencies, 99)
-	for _, latency := range latencies {
-		stats.AvgLatencyMS += latency
-	}
-	stats.AvgLatencyMS /= float64(len(latencies))
-	return stats
+	return builder.finish().Stats
 }
 
 func sortedStringKeys(values map[string]struct{}) []string {
@@ -596,9 +732,21 @@ func renderReportHTML(rows []ReportRow, generatedAt time.Time) (string, error) {
 }
 
 func renderReportHTMLWithOptions(rows []ReportRow, generatedAt time.Time, options reportOptions) (string, error) {
-	stats := computeReportStats(rows)
-	chartPoints := buildChartPointsForOptions(rows, options)
-	chartJSON, err := marshalChartJSON(chartPoints)
+	return renderReportDataHTML(buildReportDataFromRows(rows, options), generatedAt, options)
+}
+
+func buildReportDataFromRows(rows []ReportRow, options reportOptions) reportData {
+	builder := newReportSummaryBuilder()
+	for _, row := range rows {
+		builder.add(row)
+	}
+	report := builder.finish()
+	report.ChartPoints = buildChartPointsForOptions(rows, options)
+	return report
+}
+
+func renderReportDataHTML(report reportData, generatedAt time.Time, options reportOptions) (string, error) {
+	chartJSON, err := marshalChartJSON(report.ChartPoints)
 	if err != nil {
 		return "", err
 	}
@@ -609,15 +757,15 @@ func renderReportHTMLWithOptions(rows []ReportRow, generatedAt time.Time, option
 
 	data := reportViewData{
 		GeneratedAt: generatedAt.Format(time.RFC3339),
-		Stats:       stats,
+		Stats:       report.Stats,
 		ChartJSON:   chartJSON,
 		ChartInfo: ChartInfo{
-			OriginalRows: len(rows),
-			ChartPoints:  len(chartPoints),
-			Note:         chartDataNote(len(rows), len(chartPoints), options),
+			OriginalRows: report.OriginalRows,
+			ChartPoints:  len(report.ChartPoints),
+			Note:         chartDataNote(report.OriginalRows, len(report.ChartPoints), options),
 		},
-		Failures:       recentFailureRows(rows, maxReportFailures),
-		RecentRows:     recentReportRows(rows, maxRecentRows),
+		Failures:       report.Failures,
+		RecentRows:     report.RecentRows,
 		RecentRowLimit: maxRecentRows,
 		FailureLimit:   maxReportFailures,
 	}
@@ -684,7 +832,7 @@ func reportTemplateFuncs() template.FuncMap {
 
 func chartDataNote(rows, chartPoints int, options reportOptions) string {
 	if chartPoints < rows {
-		return fmt.Sprintf("Chart data was downsampled from %d to %d points for browser performance.", rows, chartPoints)
+		return fmt.Sprintf("Chart data was downsampled from %d to %d representative points for browser performance. Summary statistics use all %d CSV rows.", rows, chartPoints, rows)
 	}
 	switch {
 	case rows > veryLargeRows:
@@ -728,21 +876,44 @@ func buildChartPoints(rows []ReportRow) []ChartPoint {
 }
 
 func buildChartPointsForOptions(rows []ReportRow, options reportOptions) []ChartPoint {
-	if options.FullChart || options.MaxChartPoints <= 0 || len(rows) <= options.MaxChartPoints {
-		return buildChartPoints(rows)
-	}
-	limit := options.MaxChartPoints
-	points := make([]ChartPoint, 0, limit)
-	if limit == 1 {
-		return append(points, chartPointForRow(rows[0], 0))
-	}
-	lastIndex := len(rows) - 1
-	lastSample := limit - 1
-	for sample := 0; sample < limit; sample++ {
-		idx := sample * lastIndex / lastSample
+	indexes := reportChartSampleIndexes(len(rows), options)
+	points := make([]ChartPoint, 0, len(indexes))
+	for _, idx := range indexes {
 		points = append(points, chartPointForRow(rows[idx], idx))
 	}
 	return points
+}
+
+func reportChartSampleIndexes(totalRows int, options reportOptions) []int {
+	if totalRows <= 0 {
+		return nil
+	}
+	if options.FullChart || options.MaxChartPoints <= 0 || totalRows <= options.MaxChartPoints {
+		indexes := make([]int, totalRows)
+		for i := range indexes {
+			indexes[i] = i
+		}
+		return indexes
+	}
+
+	limit := options.MaxChartPoints
+	if limit == 1 {
+		return []int{0}
+	}
+
+	indexes := make([]int, 0, limit)
+	lastIndex := totalRows - 1
+	lastSample := limit - 1
+	previous := -1
+	for sample := 0; sample < limit; sample++ {
+		idx := sample * lastIndex / lastSample
+		if idx == previous {
+			continue
+		}
+		indexes = append(indexes, idx)
+		previous = idx
+	}
+	return indexes
 }
 
 func chartPointForRow(row ReportRow, idx int) ChartPoint {
