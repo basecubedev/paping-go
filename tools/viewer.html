@@ -109,14 +109,85 @@ let rawData = [];
 let currentFile = '';
 let chartRendered = false;
 
+function parseCSVRecords(text) {
+  if (!text) return [];
+
+  const records = [];
+  let record = [];
+  let field = '';
+  let inQuotes = false;
+  let quotedField = false;
+
+  function endField() {
+    record.push(field);
+    field = '';
+    quotedField = false;
+  }
+
+  function endRecord() {
+    endField();
+    if (record.length > 1 || record[0] !== '') {
+      records.push(record);
+    }
+    record = [];
+  }
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += ch;
+      }
+      continue;
+    }
+
+    if (ch === '"' && field === '') {
+      inQuotes = true;
+      quotedField = true;
+    } else if (ch === ',') {
+      endField();
+    } else if (ch === '\n') {
+      endRecord();
+    } else if (ch === '\r') {
+      if (text[i + 1] === '\n') i++;
+      endRecord();
+    } else if (ch === '"' && !quotedField) {
+      throw new Error('Unexpected quote in unquoted CSV field');
+    } else {
+      field += ch;
+    }
+  }
+
+  if (inQuotes) {
+    throw new Error('Unclosed quoted CSV field');
+  }
+  if (field !== '' || record.length > 0) {
+    endRecord();
+  }
+  return records;
+}
+
 function parseCSV(text) {
-  const lines = text.trim().split('\n');
-  if (lines.length < 2) return [];
-  const headers = lines[0].split(',');
-  return lines.slice(1).map(line => {
-    const cols = line.split(',');
+  const records = parseCSVRecords(text);
+  if (records.length < 2) return [];
+  const headers = records[0].map(header => header.trim());
+  if (headers.some(header => header === '')) {
+    throw new Error('CSV header contains an empty column name');
+  }
+  return records.slice(1).filter(cols => cols.some(col => col.trim() !== '')).map((cols, rowIndex) => {
+    if (cols.length > headers.length) {
+      throw new Error(`CSV row ${rowIndex + 2} has more fields than the header`);
+    }
     const obj = {};
-    headers.forEach((h, i) => obj[h.trim()] = (cols[i] || '').trim());
+    headers.forEach((h, i) => obj[h] = (cols[i] || '').trim());
     return obj;
   });
 }
@@ -128,7 +199,12 @@ function ensurePlotly() {
 }
 
 function loadData(text, filename) {
-  rawData = parseCSV(text);
+  try {
+    rawData = parseCSV(text);
+  } catch (err) {
+    alert(`Could not parse CSV: ${err.message}`);
+    return;
+  }
   currentFile = filename;
   chartRendered = false;
 
