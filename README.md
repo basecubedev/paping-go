@@ -108,6 +108,10 @@ Examples:
   -no-clobber fail if the output file already exists
   -nocolor    disable color output
   -version    print version and exit
+
+Report options:
+  --max-chart-points N  maximum embedded chart points; statistics still use the full CSV (default: 20000)
+  --full-chart          embed every chart point; can create very large HTML reports for long measurements
 ```
 
 Use either `-c` or `-d` to limit a run. `-c -1` enables continuous mode, `-c 0` is invalid, and `-c` and `-d` cannot be used together.
@@ -196,7 +200,28 @@ paping-go report examples/localhost-demo.csv -o report.html
 
 Report generation is built into the `paping-go` binary, so users do not need to download the standalone viewer separately. The generated report includes a summary, latency statistics, streaks, time range, failure details, recent raw rows, and an offline interactive SVG chart. It does not load chart libraries from a CDN.
 
-By default, the generated HTML report embeds at most 20,000 evenly sampled chart points for browser performance. Summary statistics, failure counts, latency percentiles, and recent-row tables are still computed from all CSV rows. Use `--max-chart-points N` to raise or lower the chart limit, or `--full-chart` to embed every row deliberately.
+### Large CSV Report Processing
+
+`paping-go report` is optimized for long-running measurements and large CSV files. The CSV input is scanned without keeping every row in the report model.
+
+Report statistics are calculated from the complete CSV input, while embedded chart data is limited by `--max-chart-points` to keep generated HTML files responsive and reasonably small. This means:
+
+- all samples are included in the summary statistics
+- success and failure rates are calculated from the full CSV
+- latency min/average/median/percentile/max values are calculated from the full CSV
+- failure summaries are calculated from the full CSV
+- the chart uses representative points across the whole time range
+- the generated HTML report stays manageable for large measurements
+
+By default, the generated HTML report embeds at most 20,000 evenly sampled chart points for browser performance. Use `--max-chart-points N` to raise or lower the chart limit. This option only limits embedded chart data; it does not change report statistics.
+
+For intentionally embedding every data point, use:
+
+```bash
+paping-go report results.csv -o report.html --full-chart
+```
+
+Use `--full-chart` only when you really need every sample in the chart, because it can create very large HTML files for long measurements.
 
 The report chart supports zoom, pan, reset, and display toggles. Use the mouse wheel to zoom, drag to pan, double-click or Reset to restore the full range. The chart can show or hide the latency line, individual data points, and failed checks. Hover over the display options for short explanations.
 
