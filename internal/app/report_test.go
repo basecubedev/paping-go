@@ -3,7 +3,9 @@ package app
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -336,7 +338,7 @@ func TestRenderReportHTMLDownsamplesLargeChart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderReportHTML failed: %v", err)
 	}
-	if !strings.Contains(html, "Chart data was downsampled from 25 to 5 points for browser performance.") {
+	if !strings.Contains(html, "Chart data was downsampled from 25 to 5 representative points for browser performance. Summary statistics use all 25 CSV rows.") {
 		t.Fatalf("report missing downsample note:\n%s", html)
 	}
 	var points []ChartPoint
@@ -384,6 +386,85 @@ func TestRunReportCommand(t *testing.T) {
 	}
 }
 
+func TestBuildReportDataFromCSVFileStreamsStatsAndSamplesChart(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := writeSyntheticReportCSV(t, dir, 1000, func(i int) (status, latency string) {
+		if i == 500 {
+			return "ok", "10000"
+		}
+		return "ok", "1"
+	})
+
+	report, err := buildReportDataFromCSVFile(csvPath, reportOptions{MaxChartPoints: 10, OutputMode: defaultOutputMode})
+	if err != nil {
+		t.Fatalf("buildReportDataFromCSVFile failed: %v", err)
+	}
+	if report.Stats.Total != 1000 || report.Stats.Successful != 1000 || report.Stats.Failed != 0 {
+		t.Fatalf("counts = %d/%d/%d, want 1000/1000/0", report.Stats.Total, report.Stats.Successful, report.Stats.Failed)
+	}
+	if report.Stats.MaxLatencyMS != 10000 || math.Abs(report.Stats.AvgLatencyMS-10.999) > 0.000001 {
+		t.Fatalf("latency stats = max %v avg %v, want max 10000 avg 10.999", report.Stats.MaxLatencyMS, report.Stats.AvgLatencyMS)
+	}
+	if len(report.ChartPoints) != 10 {
+		t.Fatalf("chart points = %d, want 10", len(report.ChartPoints))
+	}
+	if report.ChartPoints[0].Index != 1 || report.ChartPoints[len(report.ChartPoints)-1].Index != 1000 {
+		t.Fatalf("chart point range = %d..%d, want 1..1000", report.ChartPoints[0].Index, report.ChartPoints[len(report.ChartPoints)-1].Index)
+	}
+	if report.ChartPoints[1].Index <= 10 {
+		t.Fatalf("chart points look like first-N sampling: %#v", report.ChartPoints)
+	}
+	for _, point := range report.ChartPoints {
+		if point.Index == 501 {
+			t.Fatalf("test setup expected row 501 not to be a chart sample: %#v", report.ChartPoints)
+		}
+	}
+	firstRecent := time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC).Add(800 * time.Second)
+	lastRecent := time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC).Add(999 * time.Second)
+	if len(report.RecentRows) != maxRecentRows || !report.RecentRows[0].Timestamp.Equal(firstRecent) || !report.RecentRows[len(report.RecentRows)-1].Timestamp.Equal(lastRecent) {
+		t.Fatalf("recent rows = %d first=%#v last=%#v", len(report.RecentRows), report.RecentRows[0], report.RecentRows[len(report.RecentRows)-1])
+	}
+}
+
+func TestBuildReportDataFromCSVFileFullChartEmbedsEveryPoint(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := writeSyntheticReportCSV(t, dir, 37, func(i int) (status, latency string) {
+		if i%9 == 0 {
+			return "timeout", ""
+		}
+		return "ok", fmt.Sprintf("%d", i+1)
+	})
+
+	report, err := buildReportDataFromCSVFile(csvPath, reportOptions{MaxChartPoints: 5, FullChart: true, OutputMode: defaultOutputMode})
+	if err != nil {
+		t.Fatalf("buildReportDataFromCSVFile failed: %v", err)
+	}
+	if report.Stats.Total != 37 || report.Stats.Failed != 5 {
+		t.Fatalf("stats = total %d failed %d, want 37/5", report.Stats.Total, report.Stats.Failed)
+	}
+	if len(report.ChartPoints) != 37 {
+		t.Fatalf("full chart points = %d, want 37", len(report.ChartPoints))
+	}
+	if report.ChartPoints[0].Index != 1 || report.ChartPoints[len(report.ChartPoints)-1].Index != 37 {
+		t.Fatalf("full chart point range = %d..%d", report.ChartPoints[0].Index, report.ChartPoints[len(report.ChartPoints)-1].Index)
+	}
+}
+
+func TestBuildReportDataFromCSVFileRejectsInvalidLatency(t *testing.T) {
+	for _, latency := range []string{"NaN", "+Inf", "-Inf"} {
+		t.Run(latency, func(t *testing.T) {
+			dir := t.TempDir()
+			csvPath := writeSyntheticReportCSV(t, dir, 1, func(i int) (status, latencyValue string) {
+				return "ok", latency
+			})
+			_, err := buildReportDataFromCSVFile(csvPath, defaultReportOptions())
+			if err == nil || !strings.Contains(err.Error(), "invalid latency_ms") {
+				t.Fatalf("error = %v, want invalid latency", err)
+			}
+		})
+	}
+}
+
 func makeReportRows(count int, failEvery int) []ReportRow {
 	start := time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC)
 	rows := make([]ReportRow, 0, count)
@@ -404,4 +485,20 @@ func makeReportRows(count int, failEvery int) []ReportRow {
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+func writeSyntheticReportCSV(t *testing.T, dir string, count int, rowForIndex func(i int) (status, latency string)) string {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString("timestamp,host,ip,port,status,latency_ms\n")
+	start := time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < count; i++ {
+		status, latency := rowForIndex(i)
+		fmt.Fprintf(&b, "%s,example.com,192.0.2.1,443,%s,%s\n", start.Add(time.Duration(i)*time.Second).Format(time.RFC3339), status, latency)
+	}
+	path := filepath.Join(dir, "synthetic.csv")
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
