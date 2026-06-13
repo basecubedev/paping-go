@@ -81,6 +81,16 @@ func TestParseReportArgsChartOptions(t *testing.T) {
 			want: reportOptions{MaxChartPoints: defaultChartLimit, FullChart: true, OutputMode: defaultOutputMode},
 		},
 		{
+			name: "output mode",
+			args: []string{"input.csv", "-o", "out.html", "--output-mode", "0644"},
+			want: reportOptions{MaxChartPoints: defaultChartLimit, OutputMode: sharedOutputMode},
+		},
+		{
+			name: "output mode equals",
+			args: []string{"input.csv", "-o", "out.html", "--output-mode=0644"},
+			want: reportOptions{MaxChartPoints: defaultChartLimit, OutputMode: sharedOutputMode},
+		},
+		{
 			name:      "missing max chart points",
 			args:      []string{"input.csv", "-o", "out.html", "--max-chart-points"},
 			wantError: "missing value",
@@ -89,6 +99,16 @@ func TestParseReportArgsChartOptions(t *testing.T) {
 			name:      "bad max chart points",
 			args:      []string{"input.csv", "-o", "out.html", "--max-chart-points", "0"},
 			wantError: "positive integer",
+		},
+		{
+			name:      "missing output mode",
+			args:      []string{"input.csv", "-o", "out.html", "--output-mode"},
+			wantError: "missing value",
+		},
+		{
+			name:      "bad output mode",
+			args:      []string{"input.csv", "-o", "out.html", "--output-mode", "0666"},
+			wantError: "output mode must be either 0600 or 0644",
 		},
 	}
 
@@ -106,6 +126,33 @@ func TestParseReportArgsChartOptions(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Fatalf("options = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseOutputMode(t *testing.T) {
+	valid := map[string]os.FileMode{
+		"0600": defaultOutputMode,
+		"0644": sharedOutputMode,
+	}
+	for input, want := range valid {
+		t.Run(input, func(t *testing.T) {
+			got, err := parseOutputMode(input)
+			if err != nil {
+				t.Fatalf("parseOutputMode failed: %v", err)
+			}
+			if got != want {
+				t.Fatalf("mode = %v, want %v", got, want)
+			}
+		})
+	}
+
+	for _, input := range []string{"0666", "0777", "600", "644", "abc"} {
+		t.Run(input, func(t *testing.T) {
+			_, err := parseOutputMode(input)
+			if err == nil || !strings.Contains(err.Error(), "output mode must be either 0600 or 0644") {
+				t.Fatalf("error = %v, want output mode validation error", err)
 			}
 		})
 	}
@@ -136,6 +183,72 @@ func TestRunReportErrorPaths(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := runReport(tt.args); got != tt.want {
 				t.Fatalf("runReport exit = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunReportOutputFileModes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose Unix file modes reliably")
+	}
+	tests := []struct {
+		name     string
+		existing os.FileMode
+		args     []string
+		wantMode os.FileMode
+	}{
+		{
+			name:     "shared mode creates shared report",
+			args:     []string{"--output-mode", "0644"},
+			wantMode: sharedOutputMode,
+		},
+		{
+			name:     "shared mode hardens existing private report to requested mode",
+			existing: defaultOutputMode,
+			args:     []string{"--output-mode", "0644"},
+			wantMode: sharedOutputMode,
+		},
+		{
+			name:     "default hardens existing shared report",
+			existing: sharedOutputMode,
+			wantMode: defaultOutputMode,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			csvPath := validReportCSV(t, dir)
+			htmlPath := filepath.Join(dir, "report.html")
+			if tt.existing != 0 {
+				if err := os.WriteFile(htmlPath, []byte("old"), tt.existing); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(htmlPath, tt.existing); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			args := []string{csvPath, "-o", htmlPath}
+			args = append(args, tt.args...)
+			if got := runReport(args); got != 0 {
+				t.Fatalf("runReport exit = %d, want 0", got)
+			}
+
+			info, err := os.Stat(htmlPath)
+			if err != nil {
+				t.Fatalf("stat failed: %v", err)
+			}
+			if got := info.Mode().Perm(); got != tt.wantMode {
+				t.Fatalf("mode = %v, want %v", got, tt.wantMode)
+			}
+			content, err := os.ReadFile(htmlPath)
+			if err != nil {
+				t.Fatalf("read failed: %v", err)
+			}
+			if !strings.Contains(string(content), "paping-go report") {
+				t.Fatalf("report missing expected content:\n%s", content)
 			}
 		})
 	}
