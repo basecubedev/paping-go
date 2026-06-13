@@ -1,0 +1,74 @@
+name: Auto-vendor Plotly for Dependabot
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  vendor-plotly:
+    if: >-
+      github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check whether Plotly dependency changed
+        id: plotly-change
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              per_page: 100,
+            });
+            const changed = files.some((file) =>
+              ['package.json', 'package-lock.json'].includes(file.filename) &&
+              (file.patch || '').includes('plotly.js-dist-min')
+            );
+            core.setOutput('changed', changed ? 'true' : 'false');
+
+      - name: Check out Dependabot branch
+        if: steps.plotly-change.outputs.changed == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.repository }}
+
+      - name: Set up Node
+        if: steps.plotly-change.outputs.changed == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: "lts/*"
+          cache: npm
+
+      - name: Install viewer dependencies without scripts
+        if: steps.plotly-change.outputs.changed == 'true'
+        run: npm ci --ignore-scripts
+
+      - name: Vendor Plotly assets directly
+        if: steps.plotly-change.outputs.changed == 'true'
+        run: |
+          mkdir -p tools/vendor
+          cp node_modules/plotly.js-dist-min/plotly.min.js tools/vendor/plotly.min.js
+          cp node_modules/plotly.js-dist-min/LICENSE tools/vendor/plotly.min.js.LICENSE.txt
+
+      - name: Commit vendored Plotly assets
+        if: steps.plotly-change.outputs.changed == 'true'
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          if git diff --quiet -- tools/vendor/plotly.min.js tools/vendor/plotly.min.js.LICENSE.txt; then
+            echo "Vendored Plotly assets are already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tools/vendor/plotly.min.js tools/vendor/plotly.min.js.LICENSE.txt
+          git commit -m "Update vendored Plotly assets"
+          git push origin "HEAD:${HEAD_REF}"
