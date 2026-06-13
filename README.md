@@ -102,6 +102,7 @@ Examples:
   -t N        timeout in milliseconds (default: 1000)
   -4          force IPv4
   -6          force IPv6
+  -all-ips    test all resolved IP addresses matching -4/-6
   -o FILE     write results to CSV file
   -nocolor    disable color output
   -version    print version and exit
@@ -129,6 +130,12 @@ Force IPv4:
 paping-go -4 -p 443 example.com
 ```
 
+Test every resolved IPv4 address:
+
+```bash
+paping-go -4 -all-ips -p 443 -c 3 example.com
+```
+
 Write CSV output:
 
 ```bash
@@ -150,6 +157,8 @@ timestamp,host,ip,port,status,latency_ms
 ```
 
 Successful rows use `ok` for status and include latency in milliseconds. Failed rows use the failure reason in the status field and leave `latency_ms` empty.
+
+The `ip` column records the concrete address tested. With `-all-ips`, each matching resolved address is tested and written as its own row.
 
 ## HTML Reports
 

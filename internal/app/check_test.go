@@ -245,6 +245,58 @@ func TestRunCheckWithDepsIPSelection(t *testing.T) {
 	}
 }
 
+func TestResolvedTargetsSelectsAllMatchingIPs(t *testing.T) {
+	addrs := []net.IPAddr{
+		{IP: net.ParseIP("192.0.2.10")},
+		{IP: net.ParseIP("2001:db8::10")},
+		{IP: net.ParseIP("192.0.2.11")},
+	}
+	targets := resolvedTargets(addrs, "4", 443, true)
+	if len(targets) != 2 {
+		t.Fatalf("targets = %#v, want two IPv4 targets", targets)
+	}
+	if targets[0].DialNet != "tcp4" || targets[0].Address != "192.0.2.10:443" ||
+		targets[1].DialNet != "tcp4" || targets[1].Address != "192.0.2.11:443" {
+		t.Fatalf("targets = %#v", targets)
+	}
+
+	first := resolvedTargets(addrs, "", 443, false)
+	if len(first) != 1 || first[0].IPStr != "192.0.2.10" {
+		t.Fatalf("first target = %#v", first)
+	}
+}
+
+func TestRunCheckWithDepsAllIPsDialsEveryResolvedAddress(t *testing.T) {
+	r := newCheckRun()
+	deps := r.deps([]net.IPAddr{
+		{IP: net.ParseIP("192.0.2.10")},
+		{IP: net.ParseIP("192.0.2.11")},
+	}, dialResult{ms: 1.25}, dialResult{ms: 2.5})
+
+	code := runCheckWithDeps([]string{"-nocolor", "-all-ips", "-p", "443", "-c", "1", "-o", "results.csv", "example.com"}, "dev", deps)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, r.stdout.String(), r.stderr.String())
+	}
+	if len(r.dials) != 2 {
+		t.Fatalf("dial calls = %#v, want two", r.dials)
+	}
+	if r.dials[0].address != "192.0.2.10:443" || r.dials[1].address != "192.0.2.11:443" {
+		t.Fatalf("dial calls = %#v", r.dials)
+	}
+	if !strings.Contains(r.stdout.String(), "Connecting to example.com [192.0.2.10, 192.0.2.11]") {
+		t.Fatalf("stdout missing all IP display:\n%s", r.stdout.String())
+	}
+	gotCSV := r.files["results.csv"].String()
+	for _, want := range []string{
+		",example.com,192.0.2.10,443,ok,1.250\n",
+		",example.com,192.0.2.11,443,ok,2.500\n",
+	} {
+		if !strings.Contains(gotCSV, want) {
+			t.Fatalf("CSV missing %q:\n%s", want, gotCSV)
+		}
+	}
+}
+
 func TestRunCheckWithDepsCountModeCallsDialerExactlyN(t *testing.T) {
 	r := newCheckRun()
 	deps := r.deps([]net.IPAddr{{IP: net.ParseIP("93.184.216.34")}},

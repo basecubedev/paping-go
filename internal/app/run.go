@@ -39,6 +39,13 @@ type stats struct {
 	total    float64
 }
 
+type resolvedTarget struct {
+	IP      net.IP
+	IPStr   string
+	DialNet string
+	Address string
+}
+
 func (s *stats) recordSuccess(ms float64) {
 	s.connects++
 	s.total += ms
@@ -139,6 +146,39 @@ func validateDestination(args []string) (string, error) {
 	return args[0], nil
 }
 
+func resolvedTargets(addrs []net.IPAddr, ipFilter string, port int, all bool) []resolvedTarget {
+	var targets []resolvedTarget
+	for _, a := range addrs {
+		isV4 := a.IP.To4() != nil
+		switch ipFilter {
+		case "4":
+			if !isV4 {
+				continue
+			}
+		case "6":
+			if isV4 {
+				continue
+			}
+		}
+
+		ipStr := a.IP.String()
+		dialNet := "tcp4"
+		if !isV4 {
+			dialNet = "tcp6"
+		}
+		targets = append(targets, resolvedTarget{
+			IP:      a.IP,
+			IPStr:   ipStr,
+			DialNet: dialNet,
+			Address: net.JoinHostPort(ipStr, fmt.Sprintf("%d", port)),
+		})
+		if !all {
+			break
+		}
+	}
+	return targets
+}
+
 func csvResultRow(t time.Time, host, ip string, port int, status string, latencyMS string) []string {
 	return []string{
 		t.Format(time.RFC3339Nano),
@@ -203,6 +243,7 @@ func runCheckWithDeps(args []string, buildVersion string, deps checkDeps) int {
 	nocolor := fs.Bool("nocolor", false, "disable color output")
 	forceV4 := fs.Bool("4", false, "force IPv4")
 	forceV6 := fs.Bool("6", false, "force IPv6")
+	allIPs := fs.Bool("all-ips", false, "test all resolved IP addresses")
 	outFile := fs.String("o", "", "write results to CSV file")
 	runDuration := fs.String("d", "", "run for duration (e.g. 30s, 5m, 1h)")
 	rateStr := fs.String("r", "1", "requests per second (e.g. 0.5, 1, 5)")
@@ -225,6 +266,7 @@ func runCheckWithDeps(args []string, buildVersion string, deps checkDeps) int {
 		fmt.Fprintf(deps.stderr, "  -t N        timeout in milliseconds (default: 1000)\n")
 		fmt.Fprintf(deps.stderr, "  -4          force IPv4\n")
 		fmt.Fprintf(deps.stderr, "  -6          force IPv6\n")
+		fmt.Fprintf(deps.stderr, "  -all-ips    test all resolved IP addresses matching -4/-6\n")
 		fmt.Fprintf(deps.stderr, "  -o FILE     write results to CSV file\n")
 		fmt.Fprintf(deps.stderr, "  -nocolor    disable color output\n")
 		fmt.Fprintf(deps.stderr, "  -version    print version and exit\n")
@@ -296,46 +338,30 @@ func runCheckWithDeps(args []string, buildVersion string, deps checkDeps) int {
 		return 1
 	}
 
-	var ip net.IP
-	for _, a := range addrs {
-		isV4 := a.IP.To4() != nil
-		switch ipFilter {
-		case "4":
-			if isV4 {
-				ip = a.IP
-			}
-		case "6":
-			if !isV4 {
-				ip = a.IP
-			}
-		default:
-			ip = a.IP
-		}
-		if ip != nil {
-			break
-		}
-	}
-	if ip == nil {
+	targets := resolvedTargets(addrs, ipFilter, *port, *allIPs)
+	if len(targets) == 0 {
 		fmt.Fprintln(deps.stdout, col(colorRed, "No matching address found for requested protocol"))
 		return 1
 	}
 
-	ipStr := ip.String()
-	dialNet := "tcp4"
-	if ip.To4() == nil {
-		dialNet = "tcp6"
-	}
-	addr := net.JoinHostPort(ipStr, fmt.Sprintf("%d", *port))
-
 	// Print connection info
-	if ipStr == dest {
+	if len(targets) == 1 && targets[0].IPStr == dest {
 		fmt.Fprintf(deps.stdout, "Connecting to %s on %s:\n\n",
 			col(colorYellow, dest),
 			col(colorYellow, fmt.Sprintf("TCP %d", *port)))
-	} else {
+	} else if len(targets) == 1 {
 		fmt.Fprintf(deps.stdout, "Connecting to %s [%s] on %s:\n\n",
 			col(colorYellow, dest),
-			col(colorYellow, ipStr),
+			col(colorYellow, targets[0].IPStr),
+			col(colorYellow, fmt.Sprintf("TCP %d", *port)))
+	} else {
+		ipList := make([]string, 0, len(targets))
+		for _, target := range targets {
+			ipList = append(ipList, target.IPStr)
+		}
+		fmt.Fprintf(deps.stdout, "Connecting to %s [%s] on %s:\n\n",
+			col(colorYellow, dest),
+			col(colorYellow, strings.Join(ipList, ", ")),
 			col(colorYellow, fmt.Sprintf("TCP %d", *port)))
 	}
 
@@ -397,47 +423,59 @@ func runCheckWithDeps(args []string, buildVersion string, deps checkDeps) int {
 			break
 		}
 
-		st.attempts++
-		start := deps.now()
-		ms, dialErr := deps.dialTarget(dialNet, addr, dur)
+		cycleStart := deps.now()
+		for _, target := range targets {
+			select {
+			case <-stop:
+				goto done
+			default:
+			}
+			if !deadline.IsZero() && deps.now().After(deadline) {
+				goto done
+			}
 
-		if dialErr != nil {
-			st.failures++
-			exitCode = 1
-			errMsg := ""
-			if netErr, ok := dialErr.(net.Error); ok && netErr.Timeout() {
-				errMsg = "timeout"
-				fmt.Fprintln(deps.stdout, col(colorRed, "Connection timed out"))
-			} else {
-				errMsg = dialErr.Error()
-				fmt.Fprintln(deps.stdout, col(colorRed, fmt.Sprintf("Connection failed: %v", dialErr)))
-			}
-			if csvWriter != nil {
-				if err := writeCSVRow(csvWriter, csvResultRow(start, dest, ipStr, *port, errMsg, "")); err != nil {
-					fmt.Fprintf(deps.stderr, "CSV write error: %v\n", err)
-					exitCode = 1
-					goto done
+			st.attempts++
+			start := deps.now()
+			ms, dialErr := deps.dialTarget(target.DialNet, target.Address, dur)
+
+			if dialErr != nil {
+				st.failures++
+				exitCode = 1
+				errMsg := ""
+				if netErr, ok := dialErr.(net.Error); ok && netErr.Timeout() {
+					errMsg = "timeout"
+					fmt.Fprintf(deps.stdout, "%s [%s]\n", col(colorRed, "Connection timed out"), col(colorRed, target.IPStr))
+				} else {
+					errMsg = dialErr.Error()
+					fmt.Fprintln(deps.stdout, col(colorRed, fmt.Sprintf("Connection failed: %v [%s]", dialErr, target.IPStr)))
 				}
-			}
-		} else {
-			st.recordSuccess(ms)
-			fmt.Fprintf(deps.stdout, "Connected to %s: time=%s protocol=%s port=%s\n",
-				col(colorGreen, ipStr),
-				col(colorGreen, fmt.Sprintf("%.2fms", ms)),
-				col(colorGreen, "TCP"),
-				col(colorGreen, fmt.Sprintf("%d", *port)))
-			if csvWriter != nil {
-				if err := writeCSVRow(csvWriter, csvResultRow(start, dest, ipStr, *port, "ok", fmt.Sprintf("%.3f", ms))); err != nil {
-					fmt.Fprintf(deps.stderr, "CSV write error: %v\n", err)
-					exitCode = 1
-					goto done
+				if csvWriter != nil {
+					if err := writeCSVRow(csvWriter, csvResultRow(start, dest, target.IPStr, *port, errMsg, "")); err != nil {
+						fmt.Fprintf(deps.stderr, "CSV write error: %v\n", err)
+						exitCode = 1
+						goto done
+					}
+				}
+			} else {
+				st.recordSuccess(ms)
+				fmt.Fprintf(deps.stdout, "Connected to %s: time=%s protocol=%s port=%s\n",
+					col(colorGreen, target.IPStr),
+					col(colorGreen, fmt.Sprintf("%.2fms", ms)),
+					col(colorGreen, "TCP"),
+					col(colorGreen, fmt.Sprintf("%d", *port)))
+				if csvWriter != nil {
+					if err := writeCSVRow(csvWriter, csvResultRow(start, dest, target.IPStr, *port, "ok", fmt.Sprintf("%.3f", ms))); err != nil {
+						fmt.Fprintf(deps.stderr, "CSV write error: %v\n", err)
+						exitCode = 1
+						goto done
+					}
 				}
 			}
 		}
 
 		// Wait between attempts
 		if continuous || (!deadline.IsZero()) || i+1 < n {
-			wait := interval - deps.now().Sub(start)
+			wait := interval - deps.now().Sub(cycleStart)
 			if wait > 0 {
 				select {
 				case <-stop:

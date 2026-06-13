@@ -24,6 +24,9 @@ func TestParseReportCSVValid(t *testing.T) {
 	if !rows[0].Success || rows[0].LatencyMS != 12.345 {
 		t.Fatalf("success row = %#v, want ok with latency", rows[0])
 	}
+	if rows[0].IP != "93.184.216.34" {
+		t.Fatalf("IP = %q, want 93.184.216.34", rows[0].IP)
+	}
 	if rows[1].Success || rows[1].Error != "timeout" {
 		t.Fatalf("failure row = %#v, want timeout failure", rows[1])
 	}
@@ -78,11 +81,11 @@ func TestParseReportCSVEmpty(t *testing.T) {
 func TestComputeReportStats(t *testing.T) {
 	t0 := time.Date(2026, 6, 11, 10, 0, 0, 0, time.UTC)
 	rows := []ReportRow{
-		{Timestamp: t0.Add(3 * time.Second), Target: "b.example", Port: 443, Success: true, LatencyMS: 10},
-		{Timestamp: t0.Add(1 * time.Second), Target: "a.example", Port: 80, Success: false, Error: "timeout"},
-		{Timestamp: t0.Add(2 * time.Second), Target: "a.example", Port: 443, Success: false, Error: "refused"},
-		{Timestamp: t0, Target: "b.example", Port: 443, Success: true, LatencyMS: 30},
-		{Timestamp: t0.Add(4 * time.Second), Target: "b.example", Port: 443, Success: true, LatencyMS: 20},
+		{Timestamp: t0.Add(3 * time.Second), Target: "b.example", IP: "192.0.2.2", Port: 443, Success: true, LatencyMS: 10},
+		{Timestamp: t0.Add(1 * time.Second), Target: "a.example", IP: "192.0.2.1", Port: 80, Success: false, Error: "timeout"},
+		{Timestamp: t0.Add(2 * time.Second), Target: "a.example", IP: "192.0.2.1", Port: 443, Success: false, Error: "refused"},
+		{Timestamp: t0, Target: "b.example", IP: "192.0.2.2", Port: 443, Success: true, LatencyMS: 30},
+		{Timestamp: t0.Add(4 * time.Second), Target: "b.example", IP: "192.0.2.3", Port: 443, Success: true, LatencyMS: 20},
 	}
 
 	stats := computeReportStats(rows)
@@ -104,6 +107,9 @@ func TestComputeReportStats(t *testing.T) {
 	}
 	if strings.Join(stats.Targets, ",") != "a.example,b.example" {
 		t.Fatalf("targets = %#v", stats.Targets)
+	}
+	if strings.Join(stats.IPs, ",") != "192.0.2.1,192.0.2.2,192.0.2.3" {
+		t.Fatalf("IPs = %#v", stats.IPs)
 	}
 	if len(stats.Ports) != 2 || stats.Ports[0] != 80 || stats.Ports[1] != 443 {
 		t.Fatalf("ports = %#v", stats.Ports)
@@ -385,6 +391,7 @@ func makeReportRows(count int, failEvery int) []ReportRow {
 		row := ReportRow{
 			Timestamp: start.Add(time.Duration(i) * time.Second),
 			Target:    "127.0.0.1",
+			IP:        "127.0.0.1",
 			Port:      8080,
 			Success:   true,
 			LatencyMS: 0.25 + float64(i%100)/100,

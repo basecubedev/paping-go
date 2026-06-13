@@ -30,6 +30,7 @@ const (
 type ReportRow struct {
 	Timestamp time.Time
 	Target    string
+	IP        string
 	Port      int
 	Success   bool
 	LatencyMS float64
@@ -55,6 +56,7 @@ type ReportStats struct {
 	LastTimestamp        time.Time
 	Duration             time.Duration
 	Targets              []string
+	IPs                  []string
 	Ports                []int
 }
 
@@ -316,6 +318,7 @@ func parseReportCSVRecord(columns map[string]int, record []string) (ReportRow, e
 	row := ReportRow{
 		Timestamp: timestamp,
 		Target:    csvField(columns, record, "host"),
+		IP:        csvFieldOptional(columns, record, "ip"),
 		Port:      port,
 		Success:   success,
 		LatencyMS: latency,
@@ -337,6 +340,13 @@ func csvField(columns map[string]int, record []string, name string) string {
 	return strings.TrimSpace(record[idx])
 }
 
+func csvFieldOptional(columns map[string]int, record []string, name string) string {
+	if _, ok := columns[name]; !ok {
+		return ""
+	}
+	return csvField(columns, record, name)
+}
+
 func computeReportStats(rows []ReportRow) ReportStats {
 	stats := ReportStats{Total: len(rows)}
 	if len(rows) == 0 {
@@ -344,6 +354,7 @@ func computeReportStats(rows []ReportRow) ReportStats {
 	}
 
 	targetSet := map[string]struct{}{}
+	ipSet := map[string]struct{}{}
 	portSet := map[int]struct{}{}
 	var latencies []float64
 
@@ -355,6 +366,9 @@ func computeReportStats(rows []ReportRow) ReportStats {
 			stats.LastTimestamp = row.Timestamp
 		}
 		targetSet[row.Target] = struct{}{}
+		if strings.TrimSpace(row.IP) != "" {
+			ipSet[row.IP] = struct{}{}
+		}
 		portSet[row.Port] = struct{}{}
 
 		if row.Success {
@@ -368,6 +382,7 @@ func computeReportStats(rows []ReportRow) ReportStats {
 	stats.LossPercent = float64(stats.Failed) / float64(stats.Total) * 100
 	stats.Duration = stats.LastTimestamp.Sub(stats.FirstTimestamp)
 	stats.Targets = sortedStringKeys(targetSet)
+	stats.IPs = sortedStringKeys(ipSet)
 	stats.Ports = sortedIntKeys(portSet)
 	stats.LongestSuccessStreak, stats.LongestFailureStreak = longestReportStreaks(rows)
 
