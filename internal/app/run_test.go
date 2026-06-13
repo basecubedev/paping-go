@@ -31,6 +31,9 @@ func TestParseRate(t *testing.T) {
 		{name: "zero", value: "0", wantErr: true},
 		{name: "too large", value: "1000.1", wantErr: true},
 		{name: "not numeric", value: "fast", wantErr: true},
+		{name: "nan", value: "NaN", wantErr: true},
+		{name: "positive infinity", value: "+Inf", wantErr: true},
+		{name: "negative infinity", value: "-Inf", wantErr: true},
 	}
 
 	for _, tt := range tests {

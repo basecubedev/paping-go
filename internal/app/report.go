@@ -248,7 +248,7 @@ func parseReportCSVRecord(columns map[string]int, record []string) (ReportRow, e
 	var latency float64
 	if strings.TrimSpace(latencyText) != "" {
 		latency, err = strconv.ParseFloat(latencyText, 64)
-		if err != nil || latency < 0 {
+		if err != nil || math.IsNaN(latency) || math.IsInf(latency, 0) || latency < 0 {
 			return ReportRow{}, fmt.Errorf("invalid latency_ms %q", latencyText)
 		}
 	} else if success {

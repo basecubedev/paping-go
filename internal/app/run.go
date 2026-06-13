@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"strconv"
 	"strings"
@@ -91,8 +92,8 @@ func validateTimeout(timeoutMS int) error {
 
 func parseRate(rateStr string) (float64, error) {
 	rate, err := strconv.ParseFloat(rateStr, 64)
-	if err != nil || rate < 0.001 || rate > 1000 {
-		return 0, fmt.Errorf("rate must be between 0.001 and 1000")
+	if err != nil || math.IsNaN(rate) || math.IsInf(rate, 0) || rate < 0.001 || rate > 1000 {
+		return 0, fmt.Errorf("rate must be a finite number between 0.001 and 1000")
 	}
 	return rate, nil
 }

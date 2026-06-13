@@ -40,12 +40,16 @@ func TestParseReportCSVMissingHeader(t *testing.T) {
 }
 
 func TestParseReportCSVInvalidLatency(t *testing.T) {
-	_, err := parseReportCSV(strings.NewReader(strings.Join([]string{
-		"timestamp,host,ip,port,status,latency_ms",
-		"2026-06-11T10:00:00Z,example.com,93.184.216.34,443,ok,nope",
-	}, "\n")))
-	if err == nil || !strings.Contains(err.Error(), "invalid latency_ms") {
-		t.Fatalf("error = %v, want invalid latency", err)
+	for _, latency := range []string{"nope", "NaN", "+Inf", "-Inf"} {
+		t.Run(latency, func(t *testing.T) {
+			_, err := parseReportCSV(strings.NewReader(strings.Join([]string{
+				"timestamp,host,ip,port,status,latency_ms",
+				"2026-06-11T10:00:00Z,example.com,93.184.216.34,443,ok," + latency,
+			}, "\n")))
+			if err == nil || !strings.Contains(err.Error(), "invalid latency_ms") {
+				t.Fatalf("error = %v, want invalid latency", err)
+			}
+		})
 	}
 }
 
