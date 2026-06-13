@@ -35,7 +35,7 @@ func TestParseReportArgsMatrix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotCSV, gotOut, gotHelp, err := parseReportArgs(tt.args)
+			gotCSV, gotOut, _, gotHelp, err := parseReportArgs(tt.args)
 			if tt.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
 					t.Fatalf("error = %v, want containing %q", err, tt.wantError)
@@ -48,6 +48,64 @@ func TestParseReportArgsMatrix(t *testing.T) {
 			if gotCSV != tt.wantCSV || gotOut != tt.wantOut || gotHelp != tt.wantHelp {
 				t.Fatalf("got csv=%q out=%q help=%v, want csv=%q out=%q help=%v",
 					gotCSV, gotOut, gotHelp, tt.wantCSV, tt.wantOut, tt.wantHelp)
+			}
+		})
+	}
+}
+
+func TestParseReportArgsChartOptions(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		want      reportOptions
+		wantError string
+	}{
+		{
+			name: "defaults",
+			args: []string{"input.csv", "-o", "out.html"},
+			want: reportOptions{MaxChartPoints: defaultChartLimit},
+		},
+		{
+			name: "max chart points",
+			args: []string{"input.csv", "-o", "out.html", "--max-chart-points", "42"},
+			want: reportOptions{MaxChartPoints: 42},
+		},
+		{
+			name: "max chart points equals",
+			args: []string{"input.csv", "-o", "out.html", "--max-chart-points=43"},
+			want: reportOptions{MaxChartPoints: 43},
+		},
+		{
+			name: "full chart",
+			args: []string{"input.csv", "-o", "out.html", "--full-chart"},
+			want: reportOptions{MaxChartPoints: defaultChartLimit, FullChart: true},
+		},
+		{
+			name:      "missing max chart points",
+			args:      []string{"input.csv", "-o", "out.html", "--max-chart-points"},
+			wantError: "missing value",
+		},
+		{
+			name:      "bad max chart points",
+			args:      []string{"input.csv", "-o", "out.html", "--max-chart-points", "0"},
+			wantError: "positive integer",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, got, _, err := parseReportArgs(tt.args)
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Fatalf("error = %v, want containing %q", err, tt.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("options = %#v, want %#v", got, tt.want)
 			}
 		})
 	}
@@ -329,7 +387,7 @@ func FuzzParseReportArgs(f *testing.F) {
 		if len(args) > 8 {
 			args = args[:8]
 		}
-		_, _, _, _ = parseReportArgs(args)
+		_, _, _, _, _ = parseReportArgs(args)
 	})
 }
 

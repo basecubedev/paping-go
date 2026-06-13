@@ -24,6 +24,7 @@ const (
 	maxReportFailures = 100
 	largeReportRows   = 10000
 	veryLargeRows     = 100000
+	defaultChartLimit = 20000
 )
 
 type ReportRow struct {
@@ -68,8 +69,14 @@ type reportViewData struct {
 	FailureLimit   int
 }
 
+type reportOptions struct {
+	MaxChartPoints int
+	FullChart      bool
+}
+
 type ChartInfo struct {
 	OriginalRows int
+	ChartPoints  int
 	Note         string
 }
 
@@ -84,10 +91,10 @@ type ChartPoint struct {
 
 func runReport(args []string) int {
 	usage := func() {
-		fmt.Fprintf(os.Stderr, "Usage: paping-go report <csv-file> -o <report.html>\n")
+		fmt.Fprintf(os.Stderr, "Usage: paping-go report <csv-file> -o <report.html> [--max-chart-points N] [--full-chart]\n")
 	}
 
-	csvPath, outputPath, help, err := parseReportArgs(args)
+	csvPath, outputPath, options, help, err := parseReportArgs(args)
 	if help {
 		usage()
 		return 0
@@ -112,7 +119,7 @@ func runReport(args []string) int {
 		fmt.Fprintf(os.Stderr, "Error: failed to read CSV: %v\n", err)
 		return 2
 	}
-	html, err := renderReportHTML(rows, time.Now())
+	html, err := renderReportHTMLWithOptions(rows, time.Now(), options)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to generate report: %v\n", err)
 		return 2
@@ -126,33 +133,64 @@ func runReport(args []string) int {
 	return 0
 }
 
-func parseReportArgs(args []string) (csvPath, outputPath string, help bool, err error) {
+func defaultReportOptions() reportOptions {
+	return reportOptions{MaxChartPoints: defaultChartLimit}
+}
+
+func parseReportArgs(args []string) (csvPath, outputPath string, options reportOptions, help bool, err error) {
+	options = defaultReportOptions()
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
 		case arg == "-h" || arg == "--help":
-			return "", "", true, nil
+			return "", "", options, true, nil
 		case arg == "-o" || arg == "--output":
 			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
-				return "", "", false, fmt.Errorf("missing output file. Use -o report.html.")
+				return "", "", options, false, fmt.Errorf("missing output file. Use -o report.html.")
 			}
 			i++
 			outputPath = args[i]
 		case strings.HasPrefix(arg, "--output="):
 			outputPath = strings.TrimPrefix(arg, "--output=")
 			if strings.TrimSpace(outputPath) == "" {
-				return "", "", false, fmt.Errorf("missing output file. Use -o report.html.")
+				return "", "", options, false, fmt.Errorf("missing output file. Use -o report.html.")
 			}
+		case arg == "--full-chart":
+			options.FullChart = true
+		case arg == "--max-chart-points":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return "", "", options, false, fmt.Errorf("missing value for --max-chart-points")
+			}
+			i++
+			limit, parseErr := parseMaxChartPoints(args[i])
+			if parseErr != nil {
+				return "", "", options, false, parseErr
+			}
+			options.MaxChartPoints = limit
+		case strings.HasPrefix(arg, "--max-chart-points="):
+			limit, parseErr := parseMaxChartPoints(strings.TrimPrefix(arg, "--max-chart-points="))
+			if parseErr != nil {
+				return "", "", options, false, parseErr
+			}
+			options.MaxChartPoints = limit
 		case strings.HasPrefix(arg, "-"):
-			return "", "", false, fmt.Errorf("unknown report option %q", arg)
+			return "", "", options, false, fmt.Errorf("unknown report option %q", arg)
 		default:
 			if csvPath != "" {
-				return "", "", false, fmt.Errorf("report accepts exactly one CSV input file")
+				return "", "", options, false, fmt.Errorf("report accepts exactly one CSV input file")
 			}
 			csvPath = arg
 		}
 	}
-	return csvPath, outputPath, false, nil
+	return csvPath, outputPath, options, false, nil
+}
+
+func parseMaxChartPoints(value string) (int, error) {
+	limit, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || limit < 1 {
+		return 0, fmt.Errorf("--max-chart-points must be a positive integer")
+	}
+	return limit, nil
 }
 
 func readReportCSVFile(path string) ([]ReportRow, error) {
@@ -396,8 +434,12 @@ func percentileNearestRank(sortedValues []float64, percentile float64) float64 {
 }
 
 func renderReportHTML(rows []ReportRow, generatedAt time.Time) (string, error) {
+	return renderReportHTMLWithOptions(rows, generatedAt, defaultReportOptions())
+}
+
+func renderReportHTMLWithOptions(rows []ReportRow, generatedAt time.Time, options reportOptions) (string, error) {
 	stats := computeReportStats(rows)
-	chartPoints := buildChartPoints(rows)
+	chartPoints := buildChartPointsForOptions(rows, options)
 	chartJSON, err := marshalChartJSON(chartPoints)
 	if err != nil {
 		return "", err
@@ -413,7 +455,8 @@ func renderReportHTML(rows []ReportRow, generatedAt time.Time) (string, error) {
 		ChartJSON:   chartJSON,
 		ChartInfo: ChartInfo{
 			OriginalRows: len(rows),
-			Note:         chartFullDataNote(len(rows)),
+			ChartPoints:  len(chartPoints),
+			Note:         chartDataNote(len(rows), len(chartPoints), options),
 		},
 		Failures:       recentFailureRows(rows, maxReportFailures),
 		RecentRows:     recentReportRows(rows, maxRecentRows),
@@ -481,9 +524,15 @@ func reportTemplateFuncs() template.FuncMap {
 	}
 }
 
-func chartFullDataNote(rows int) string {
+func chartDataNote(rows, chartPoints int, options reportOptions) string {
+	if chartPoints < rows {
+		return fmt.Sprintf("Chart data was downsampled from %d to %d points for browser performance.", rows, chartPoints)
+	}
 	switch {
 	case rows > veryLargeRows:
+		if options.FullChart {
+			return fmt.Sprintf("Chart contains all %d CSV rows because --full-chart was used. Very large reports can be slow in the browser; the CSV remains the canonical raw data source.", rows)
+		}
 		return fmt.Sprintf("Chart contains all %d CSV rows. Very large reports can be slow in the browser; the CSV remains the canonical raw data source.", rows)
 	case rows > largeReportRows:
 		return fmt.Sprintf("Chart contains all %d CSV rows. Large reports may take longer to open or interact with.", rows)
@@ -515,18 +564,40 @@ func recentReportRows(rows []ReportRow, limit int) []ReportRow {
 func buildChartPoints(rows []ReportRow) []ChartPoint {
 	points := make([]ChartPoint, 0, len(rows))
 	for idx, row := range rows {
-		point := ChartPoint{
-			Index:     idx + 1,
-			Label:     fmt.Sprintf("Attempt %d", idx+1),
-			Timestamp: row.Timestamp.Format(time.RFC3339),
-			Success:   row.Success,
-		}
-		if row.Success {
-			point.LatencyMS = row.LatencyMS
-		} else {
-			point.Error = row.Error
-		}
-		points = append(points, point)
+		points = append(points, chartPointForRow(row, idx))
 	}
 	return points
+}
+
+func buildChartPointsForOptions(rows []ReportRow, options reportOptions) []ChartPoint {
+	if options.FullChart || options.MaxChartPoints <= 0 || len(rows) <= options.MaxChartPoints {
+		return buildChartPoints(rows)
+	}
+	limit := options.MaxChartPoints
+	points := make([]ChartPoint, 0, limit)
+	if limit == 1 {
+		return append(points, chartPointForRow(rows[0], 0))
+	}
+	lastIndex := len(rows) - 1
+	lastSample := limit - 1
+	for sample := 0; sample < limit; sample++ {
+		idx := sample * lastIndex / lastSample
+		points = append(points, chartPointForRow(rows[idx], idx))
+	}
+	return points
+}
+
+func chartPointForRow(row ReportRow, idx int) ChartPoint {
+	point := ChartPoint{
+		Index:     idx + 1,
+		Label:     fmt.Sprintf("Attempt %d", idx+1),
+		Timestamp: row.Timestamp.Format(time.RFC3339),
+		Success:   row.Success,
+	}
+	if row.Success {
+		point.LatencyMS = row.LatencyMS
+	} else {
+		point.Error = row.Error
+	}
+	return point
 }

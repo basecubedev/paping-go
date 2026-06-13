@@ -272,6 +272,24 @@ func TestBuildChartPointsIncludesAllRows(t *testing.T) {
 	}
 }
 
+func TestBuildChartPointsForOptionsDownsamplesEvenly(t *testing.T) {
+	rows := makeReportRows(10, 0)
+	points := buildChartPointsForOptions(rows, reportOptions{MaxChartPoints: 4})
+	if len(points) != 4 {
+		t.Fatalf("chart points = %d, want 4", len(points))
+	}
+	got := []int{points[0].Index, points[1].Index, points[2].Index, points[3].Index}
+	want := []int{1, 4, 7, 10}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("sampled indexes = %v, want %v", got, want)
+	}
+
+	full := buildChartPointsForOptions(rows, reportOptions{MaxChartPoints: 4, FullChart: true})
+	if len(full) != len(rows) {
+		t.Fatalf("full chart points = %d, want %d", len(full), len(rows))
+	}
+}
+
 func TestRenderReportHTMLLargeDatasetStaysCompact(t *testing.T) {
 	rows := makeReportRows(10001, 10)
 	html, err := renderReportHTML(rows, time.Date(2026, 6, 11, 11, 0, 0, 0, time.UTC))
@@ -303,9 +321,31 @@ func TestRenderReportHTMLLargeDatasetStaysCompact(t *testing.T) {
 	}
 }
 
-func TestChartFullDataNoteWarnsForVeryLargeReports(t *testing.T) {
-	note := chartFullDataNote(100001)
-	if !strings.Contains(note, "Chart contains all 100001 CSV rows.") || !strings.Contains(note, "Very large reports can be slow in the browser") {
+func TestRenderReportHTMLDownsamplesLargeChart(t *testing.T) {
+	rows := makeReportRows(25, 0)
+	html, err := renderReportHTMLWithOptions(rows, time.Date(2026, 6, 11, 11, 0, 0, 0, time.UTC), reportOptions{MaxChartPoints: 5})
+	if err != nil {
+		t.Fatalf("renderReportHTML failed: %v", err)
+	}
+	if !strings.Contains(html, "Chart data was downsampled from 25 to 5 points for browser performance.") {
+		t.Fatalf("report missing downsample note:\n%s", html)
+	}
+	var points []ChartPoint
+	if err := json.Unmarshal([]byte(extractChartJSON(t, html)), &points); err != nil {
+		t.Fatalf("chart JSON did not unmarshal: %v", err)
+	}
+	if len(points) != 5 || points[0].Index != 1 || points[len(points)-1].Index != 25 {
+		t.Fatalf("chart points = %#v", points)
+	}
+	stats := computeReportStats(rows)
+	if !strings.Contains(html, fmt.Sprintf("<div class=\"value\">%d</div>", stats.Total)) {
+		t.Fatalf("report should still show full stats total %d", stats.Total)
+	}
+}
+
+func TestChartDataNoteWarnsForVeryLargeFullReports(t *testing.T) {
+	note := chartDataNote(100001, 100001, reportOptions{MaxChartPoints: defaultChartLimit, FullChart: true})
+	if !strings.Contains(note, "Chart contains all 100001 CSV rows because --full-chart was used.") || !strings.Contains(note, "Very large reports can be slow in the browser") {
 		t.Fatalf("very large report note = %q", note)
 	}
 }
