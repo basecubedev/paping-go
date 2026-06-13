@@ -143,3 +143,16 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: dist/*
+
+      - name: Trigger basecubedev APT repository update
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.APT_REPO_WORKFLOW_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          gh workflow run update-apt.yml \
+            --repo basecubedev/basecubedev-apt \
+            --ref main \
+            -f source_repo=basecubedev/paping-go \
+            -f tag="$TAG_NAME" \
+            -f package=paping-go
