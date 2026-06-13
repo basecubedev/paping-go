@@ -16,8 +16,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check whether Plotly dependency changed
-        id: plotly-change
+      - name: Check whether npm package files changed
+        id: package-files
         uses: actions/github-script@v8
         with:
           script: |
@@ -28,38 +28,37 @@ jobs:
               per_page: 100,
             });
             const changed = files.some((file) =>
-              ['package.json', 'package-lock.json'].includes(file.filename) &&
-              (file.patch || '').includes('plotly.js-dist-min')
+              ['package.json', 'package-lock.json'].includes(file.filename)
             );
             core.setOutput('changed', changed ? 'true' : 'false');
 
       - name: Check out Dependabot branch
-        if: steps.plotly-change.outputs.changed == 'true'
+        if: steps.package-files.outputs.changed == 'true'
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           repository: ${{ github.repository }}
 
       - name: Set up Node
-        if: steps.plotly-change.outputs.changed == 'true'
+        if: steps.package-files.outputs.changed == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: "lts/*"
           cache: npm
 
       - name: Install viewer dependencies without scripts
-        if: steps.plotly-change.outputs.changed == 'true'
+        if: steps.package-files.outputs.changed == 'true'
         run: npm ci --ignore-scripts
 
       - name: Vendor Plotly assets directly
-        if: steps.plotly-change.outputs.changed == 'true'
+        if: steps.package-files.outputs.changed == 'true'
         run: |
           mkdir -p tools/vendor
           cp node_modules/plotly.js-dist-min/plotly.min.js tools/vendor/plotly.min.js
           cp node_modules/plotly.js-dist-min/LICENSE tools/vendor/plotly.min.js.LICENSE.txt
 
       - name: Commit vendored Plotly assets
-        if: steps.plotly-change.outputs.changed == 'true'
+        if: steps.package-files.outputs.changed == 'true'
         env:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |

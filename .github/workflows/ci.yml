@@ -36,9 +36,15 @@ jobs:
 
       - name: Verify vendored viewer assets
         run: |
-          npm ci
-          npm run vendor
-          git diff --exit-code -- tools/vendor/plotly.min.js tools/vendor/plotly.min.js.LICENSE.txt
+          npm ci --ignore-scripts
+          cmp tools/vendor/plotly.min.js node_modules/plotly.js-dist-min/plotly.min.js || {
+            echo "tools/vendor/plotly.min.js is out of sync; run npm ci and vendor the Plotly asset."
+            exit 1
+          }
+          cmp tools/vendor/plotly.min.js.LICENSE.txt node_modules/plotly.js-dist-min/LICENSE || {
+            echo "tools/vendor/plotly.min.js.LICENSE.txt is out of sync; run npm ci and vendor the Plotly license."
+            exit 1
+          }
 
       - name: Tidy modules
         run: go mod tidy
