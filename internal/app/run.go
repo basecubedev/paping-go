@@ -274,6 +274,9 @@ func runCheckWithDeps(args []string, buildVersion string, deps checkDeps) int {
 		fmt.Fprintf(deps.stderr, "  -no-clobber fail if the output file already exists\n")
 		fmt.Fprintf(deps.stderr, "  -nocolor    disable color output\n")
 		fmt.Fprintf(deps.stderr, "  -version    print version and exit\n")
+		fmt.Fprintf(deps.stderr, "\nReport options:\n")
+		fmt.Fprintf(deps.stderr, "  --max-chart-points N  maximum embedded chart points; statistics still use the full CSV (default: %d)\n", defaultChartLimit)
+		fmt.Fprintf(deps.stderr, "  --full-chart          embed every chart point; can create very large HTML reports for long measurements\n")
 	}
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {

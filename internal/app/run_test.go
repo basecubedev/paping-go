@@ -220,7 +220,9 @@ func TestCLIHelpSmoke(t *testing.T) {
 		!strings.Contains(output, "-c N        number of checks (-1 = infinite, default: -1)") ||
 		!strings.Contains(output, "-d DURATION run for duration; cannot be combined with -c") ||
 		!strings.Contains(output, "-all-ips    test all resolved IP addresses matching -4/-6; -r controls full IP cycles per second") ||
-		!strings.Contains(output, "-no-clobber fail if the output file already exists") {
+		!strings.Contains(output, "-no-clobber fail if the output file already exists") ||
+		!strings.Contains(output, "--max-chart-points N  maximum embedded chart points; statistics still use the full CSV") ||
+		!strings.Contains(output, "--full-chart          embed every chart point; can create very large HTML reports") {
 		t.Fatalf("help output missing usage:\n%s", output)
 	}
 }
