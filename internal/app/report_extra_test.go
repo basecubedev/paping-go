@@ -141,6 +141,27 @@ func TestRunReportErrorPaths(t *testing.T) {
 	}
 }
 
+func TestCreatePrivateOutputFileUsesPrivateMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose Unix file modes reliably")
+	}
+	path := filepath.Join(t.TempDir(), "diagnostic-output.txt")
+	f, err := createPrivateOutputFile(path)
+	if err != nil {
+		t.Fatalf("createPrivateOutputFile failed: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close failed: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat failed: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("file mode = %v, want 0600", got)
+	}
+}
+
 func TestParseReportCSVBoundaryCases(t *testing.T) {
 	t.Run("normalizes headers and accepts extra columns", func(t *testing.T) {
 		rows, err := parseReportCSV(strings.NewReader(strings.Join([]string{

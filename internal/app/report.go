@@ -124,7 +124,7 @@ func runReport(args []string) int {
 		fmt.Fprintf(os.Stderr, "Error: failed to generate report: %v\n", err)
 		return 2
 	}
-	if err := os.WriteFile(outputPath, []byte(html), 0644); err != nil {
+	if err := writePrivateOutputFile(outputPath, []byte(html)); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to write report: %v\n", err)
 		return 2
 	}
@@ -191,6 +191,26 @@ func parseMaxChartPoints(value string) (int, error) {
 		return 0, fmt.Errorf("--max-chart-points must be a positive integer")
 	}
 	return limit, nil
+}
+
+func createPrivateOutputFile(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+}
+
+func writePrivateOutputFile(path string, data []byte) error {
+	f, err := createPrivateOutputFile(path)
+	if err != nil {
+		return err
+	}
+	n, writeErr := f.Write(data)
+	closeErr := f.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	if n != len(data) {
+		return io.ErrShortWrite
+	}
+	return closeErr
 }
 
 func readReportCSVFile(path string) ([]ReportRow, error) {

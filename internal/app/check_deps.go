@@ -30,7 +30,7 @@ func realCheckDeps() checkDeps {
 		now:          time.Now,
 		after:        time.After,
 		createFile: func(name string) (io.WriteCloser, error) {
-			return os.Create(name)
+			return createPrivateOutputFile(name)
 		},
 		enableConsoleColors: enableConsoleColors,
 		setupInterrupt:      setupInterrupt,
@@ -67,7 +67,7 @@ func fillCheckDeps(deps checkDeps) checkDeps {
 	}
 	if deps.createFile == nil {
 		deps.createFile = func(name string) (io.WriteCloser, error) {
-			return os.Create(name)
+			return createPrivateOutputFile(name)
 		}
 	}
 	if deps.enableConsoleColors == nil {
