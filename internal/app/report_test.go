@@ -140,6 +140,9 @@ func TestRenderReportHTMLEscapesCSVValues(t *testing.T) {
 	if !strings.Contains(html, "paping-go report") || !strings.Contains(html, "Total checks") {
 		t.Fatalf("report HTML missing expected summary:\n%s", html)
 	}
+	if !strings.Contains(html, `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">`) {
+		t.Fatalf("report HTML missing CSP meta tag:\n%s", html)
+	}
 	if strings.Contains(html, `<script>alert("x")</script>`) || strings.Contains(html, "<b>boom</b>") {
 		t.Fatalf("report contains unescaped CSV values:\n%s", html)
 	}
