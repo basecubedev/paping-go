@@ -218,7 +218,8 @@ func TestCLIHelpSmoke(t *testing.T) {
 	if !strings.Contains(output, "paping-go [options] <host>") ||
 		!strings.Contains(output, "paping-go report <csv-file> -o <report.html>") ||
 		!strings.Contains(output, "-c N        number of checks (-1 = infinite, default: -1)") ||
-		!strings.Contains(output, "-d DURATION run for duration; cannot be combined with -c") {
+		!strings.Contains(output, "-d DURATION run for duration; cannot be combined with -c") ||
+		!strings.Contains(output, "-all-ips    test all resolved IP addresses matching -4/-6; -r controls full IP cycles per second") {
 		t.Fatalf("help output missing usage:\n%s", output)
 	}
 }

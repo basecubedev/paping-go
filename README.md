@@ -102,13 +102,15 @@ Examples:
   -t N        timeout in milliseconds (default: 1000)
   -4          force IPv4
   -6          force IPv6
-  -all-ips    test all resolved IP addresses matching -4/-6
+  -all-ips    test all resolved IP addresses matching -4/-6; -r controls full IP cycles per second
   -o FILE     write results to CSV file
   -nocolor    disable color output
   -version    print version and exit
 ```
 
 Use either `-c` or `-d` to limit a run. `-c -1` enables continuous mode, `-c 0` is invalid, and `-c` and `-d` cannot be used together.
+
+With `-all-ips`, the rate controls probe cycles per second. Each cycle probes every selected IP address, so `-r 1` with five selected IPs can perform up to five TCP checks per second.
 
 ## Examples
 
@@ -135,6 +137,8 @@ Test every resolved IPv4 address:
 ```bash
 paping-go -4 -all-ips -p 443 -c 3 example.com
 ```
+
+In this mode, each count is a full cycle over all selected IPs.
 
 Write CSV output:
 
