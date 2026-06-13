@@ -28,3 +28,11 @@ npm run vendor
 `viewer.html` uses a locally vendored Plotly.js browser bundle for chart rendering. Plotly.js is licensed under the MIT License.
 
 The viewer is optional and is not part of the `paping-go` binary.
+
+## Source archive helper
+
+`make-source-archive.sh` creates a clean source tarball with `git archive` and checks that common working-tree artifacts are absent:
+
+```bash
+tools/make-source-archive.sh HEAD paping-go.tar.gz
+```

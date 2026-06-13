@@ -255,9 +255,13 @@ Create clean source archives from git so generated files such as `.git/`,
 `node_modules/`, coverage profiles, and local build outputs are excluded:
 
 ```bash
+tools/make-source-archive.sh HEAD paping-go.tar.gz
 git archive --format=tar.gz --output=paping-go.tar.gz HEAD
 git archive --format=zip --output=paping-go.zip HEAD
 ```
+
+The helper also checks that the tarball does not contain `.git/`,
+`node_modules/`, `dist/`, or `coverage.out`.
 
 ## Background
 
