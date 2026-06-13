@@ -269,10 +269,6 @@ func createOutputFile(path string, mode os.FileMode, noClobber bool) (*os.File, 
 	return f, nil
 }
 
-func writePrivateOutputFile(path string, data []byte) error {
-	return writeOutputFile(path, data, defaultOutputMode)
-}
-
 func writeOutputFile(path string, data []byte, mode os.FileMode) error {
 	f, err := createOutputFile(path, mode, false)
 	if err != nil {
@@ -349,15 +345,6 @@ func writeAll(f *os.File, data []byte) error {
 		return io.ErrShortWrite
 	}
 	return nil
-}
-
-func readReportCSVFile(path string) ([]ReportRow, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return parseReportCSV(f)
 }
 
 func buildReportDataFromCSVFile(path string, options reportOptions) (reportData, error) {
@@ -679,27 +666,6 @@ func sortedIntKeys(values map[int]struct{}) []int {
 	}
 	sort.Ints(keys)
 	return keys
-}
-
-func longestReportStreaks(rows []ReportRow) (successStreak, failureStreak int) {
-	currentSuccess := 0
-	currentFailure := 0
-	for _, row := range rows {
-		if row.Success {
-			currentSuccess++
-			currentFailure = 0
-			if currentSuccess > successStreak {
-				successStreak = currentSuccess
-			}
-		} else {
-			currentFailure++
-			currentSuccess = 0
-			if currentFailure > failureStreak {
-				failureStreak = currentFailure
-			}
-		}
-	}
-	return successStreak, failureStreak
 }
 
 func median(sortedValues []float64) float64 {
