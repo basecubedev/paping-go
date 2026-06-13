@@ -162,6 +162,52 @@ func TestCreatePrivateOutputFileUsesPrivateMode(t *testing.T) {
 	}
 }
 
+func TestCreatePrivateOutputFileHardensExistingMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose Unix file modes reliably")
+	}
+	path := filepath.Join(t.TempDir(), "diagnostic-output.txt")
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := createPrivateOutputFile(path)
+	if err != nil {
+		t.Fatalf("createPrivateOutputFile failed: %v", err)
+	}
+	if _, err := f.Write([]byte("new")); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close failed: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat failed: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("file mode = %v, want 0600", got)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if string(content) != "new" {
+		t.Fatalf("content = %q, want new", content)
+	}
+}
+
+func TestCreatePrivateOutputFileReturnsOpenError(t *testing.T) {
+	_, err := createPrivateOutputFile(filepath.Join(t.TempDir(), "missing", "diagnostic-output.txt"))
+	if err == nil {
+		t.Fatal("expected open error")
+	}
+}
+
 func TestParseReportCSVBoundaryCases(t *testing.T) {
 	t.Run("normalizes headers and accepts extra columns", func(t *testing.T) {
 		rows, err := parseReportCSV(strings.NewReader(strings.Join([]string{
