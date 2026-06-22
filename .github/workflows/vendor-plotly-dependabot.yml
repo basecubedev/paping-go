@@ -18,7 +18,7 @@ jobs:
     steps:
       - name: Check whether npm package files changed
         id: package-files
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const files = await github.paginate(github.rest.pulls.listFiles, {
