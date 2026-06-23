@@ -15,20 +15,37 @@ jobs:
     strategy:
       matrix:
         include:
+          # Normal Linux amd64: latest stable toolchain, static pure-Go build.
           - goos: linux
             goarch: amd64
+            go-version: stable
             name: paping-go-linux-amd64
+            static-linux: true
+            goamd64: v1
+          # Legacy Linux amd64: built with Go 1.23.x for very old distros/kernels.
+          - goos: linux
+            goarch: amd64
+            go-version: "1.23.x"
+            name: paping-go-linux-amd64-legacy
+            static-linux: true
+            goamd64: v1
+          # Linux arm64: latest stable toolchain, static pure-Go build.
           - goos: linux
             goarch: arm64
+            go-version: stable
             name: paping-go-linux-arm64
+            static-linux: true
           - goos: windows
             goarch: amd64
+            go-version: stable
             name: paping-go-windows-amd64.exe
           - goos: darwin
             goarch: amd64
+            go-version: stable
             name: paping-go-darwin-amd64
           - goos: darwin
             goarch: arm64
+            go-version: stable
             name: paping-go-darwin-arm64
 
     steps:
@@ -38,15 +55,68 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: stable
+          go-version: ${{ matrix.go-version }}
           check-latest: true
 
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          STATIC_LINUX: ${{ matrix.static-linux }}
+          GOAMD64_LEVEL: ${{ matrix.goamd64 }}
+          ARTIFACT: ${{ matrix.name }}
           VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('dev-{0}', github.sha) }}
-        run: go build -ldflags "-X main.version=${VERSION}" -o "${{ matrix.name }}" ./cmd/paping-go
+        run: |
+          set -euo pipefail
+
+          if [ "${STATIC_LINUX:-}" = "true" ]; then
+            # Static pure-Go Linux build: no cgo, no GLIBC dependency.
+            export CGO_ENABLED=0
+            if [ -n "${GOAMD64_LEVEL:-}" ]; then
+              export GOAMD64="${GOAMD64_LEVEL}"
+            fi
+            go build \
+              -trimpath \
+              -tags "netgo osusergo" \
+              -ldflags "-s -w -buildid= -X main.version=${VERSION}" \
+              -o "${ARTIFACT}" \
+              ./cmd/paping-go
+          else
+            go build -ldflags "-X main.version=${VERSION}" -o "${ARTIFACT}" ./cmd/paping-go
+          fi
+
+      - name: Verify static Linux binary
+        if: matrix.static-linux == true
+        env:
+          ARTIFACT: ${{ matrix.name }}
+        run: |
+          set -euo pipefail
+
+          verify_static() {
+            artifact="$1"
+            echo "== Verifying ${artifact} =="
+            file "${artifact}"
+
+            ldd "${artifact}" 2>&1 | tee /tmp/ldd-output.txt || true
+            if grep -qE 'libc\.so|=>' /tmp/ldd-output.txt; then
+              echo "ERROR: ${artifact} has dynamic runtime libc dependencies" >&2
+              return 1
+            fi
+            if ! grep -q 'not a dynamic executable' /tmp/ldd-output.txt; then
+              echo "ERROR: ${artifact} is not reported as a static executable" >&2
+              return 1
+            fi
+
+            readelf --version-info "${artifact}" > /tmp/readelf-version-info.txt 2>/dev/null || true
+            if grep -q 'GLIBC_' /tmp/readelf-version-info.txt; then
+              echo "ERROR: ${artifact} requires GLIBC version symbols" >&2
+              return 1
+            fi
+
+            echo "OK: ${artifact} is statically linked and GLIBC-independent"
+          }
+
+          verify_static "${ARTIFACT}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
