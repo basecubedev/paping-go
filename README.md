@@ -47,6 +47,10 @@ go install github.com/basecubedev/paping-go/cmd/paping-go@latest
 
 Once releases are published, most users should download prebuilt binaries from GitHub Releases.
 
+For most Linux systems, use the normal `linux-amd64` or `linux-arm64` binary.
+For very old Linux distributions or kernels, use `linux-amd64-legacy`.
+All Linux release binaries are built as static pure-Go binaries and do not require a specific GLIBC version.
+
 ## Debian/Ubuntu package
 
 Tagged releases provide Debian packages for `amd64` and `arm64`.
@@ -273,7 +277,11 @@ The viewer uses a locally vendored Plotly.js file from `tools/vendor/plotly.min.
 ## Development
 
 The minimum supported Go version for building from source is Go 1.23.
-Release binaries are built with the latest stable Go toolchain.
+Most release binaries are built with the latest stable Go toolchain. The
+additional `linux-amd64-legacy` artifact is built with Go 1.23.x for very old
+Linux distributions. All Linux release binaries are built as static pure-Go
+binaries (`CGO_ENABLED=0`, `netgo osusergo` tags) so they do not depend on a
+specific GLIBC version.
 
 Run local checks:
 
