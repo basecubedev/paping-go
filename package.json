@@ -6,6 +6,6 @@
     "vendor": "mkdir -p tools/vendor && cp node_modules/plotly.js-dist-min/plotly.min.js tools/vendor/plotly.min.js && cp node_modules/plotly.js-dist-min/LICENSE tools/vendor/plotly.min.js.LICENSE.txt"
   },
   "devDependencies": {
-    "plotly.js-dist-min": "^3.6.0"
+    "plotly.js-dist-min": "^3.7.0"
   }
 }
